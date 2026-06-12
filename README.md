@@ -19,7 +19,7 @@ Java Spring Boot backend API for Next Please, a web-first gamified reputation in
 ./mvnw spring-boot:run
 ```
 
-Copy `.env.example` to `.env` or export equivalent environment variables before connecting to Supabase PostgreSQL.
+Spring Boot reads environment variables from the process environment. Add values to your IDE run configuration, export them in your shell, or set them in Railway service variables.
 
 ## Environment Variables
 
@@ -31,6 +31,8 @@ Copy `.env.example` to `.env` or export equivalent environment variables before 
 - `SUPABASE_PROJECT_URL`: Supabase project URL.
 - `SUPABASE_JWKS_URI`: Supabase JWKS URL.
 - `SUPABASE_ISSUER`: Supabase JWT issuer.
+
+See [docs/environment-setup.md](docs/environment-setup.md) for Supabase, local, and Railway setup details.
 
 ## Architecture Notes
 
@@ -60,7 +62,19 @@ Copy `.env.example` to `.env` or export equivalent environment variables before 
 .
 +- .env.example
 +- .gitattributes
++- .github/
+  - .github/workflows/
 +- .gitignore
++- .idea/
+  - .idea/.gitignore
+  - .idea/compiler.xml
+  - .idea/encodings.xml
+  - .idea/jarRepositories.xml
+  - .idea/misc.xml
+  - .idea/vcs.xml
+  - .idea/workspace.xml
++- docs/
+  - docs/environment-setup.md
 +- HELP.md
 +- mvnw
 +- mvnw.cmd
