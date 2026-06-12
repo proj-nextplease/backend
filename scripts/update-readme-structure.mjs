@@ -5,7 +5,7 @@ const root = process.cwd();
 const readmePath = join(root, 'README.md');
 const start = '<!-- PROJECT_STRUCTURE_START -->';
 const end = '<!-- PROJECT_STRUCTURE_END -->';
-const ignored = new Set(['.git', 'target', '.mvn', '.DS_Store']);
+const ignored = new Set(['.git', 'target', '.mvn', '.DS_Store', '.env']);
 
 function walk(dir, depth = 0) {
   if (depth > 8) {

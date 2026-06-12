@@ -54,6 +54,8 @@ See [docs/environment-setup.md](docs/environment-setup.md) for Supabase, local, 
 
 - `GET /api/v1/health`: service health.
 - `GET /api/v1/me`: current authenticated user, once Supabase JWT validation is enabled and an `app_users` row exists.
+- `GET /swagger-ui/index.html`: Swagger UI for backend API documentation.
+- `GET /v3/api-docs`: OpenAPI JSON specification.
 
 ## Project Structure
 
@@ -91,6 +93,7 @@ See [docs/environment-setup.md](docs/environment-setup.md) for Supabase, local, 
             - src/main/java/com/nextplease/backend/BackendApplication.java
             - src/main/java/com/nextplease/backend/config/
               - src/main/java/com/nextplease/backend/config/AppCorsProperties.java
+              - src/main/java/com/nextplease/backend/config/OpenApiConfig.java
               - src/main/java/com/nextplease/backend/config/SecurityConfig.java
             - src/main/java/com/nextplease/backend/controller/
               - src/main/java/com/nextplease/backend/controller/HealthController.java
