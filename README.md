@@ -67,17 +67,8 @@ See [docs/environment-setup.md](docs/environment-setup.md) for Supabase, local, 
 +- .github/
   - .github/workflows/
 +- .gitignore
-+- .idea/
-  - .idea/.gitignore
-  - .idea/compiler.xml
-  - .idea/encodings.xml
-  - .idea/jarRepositories.xml
-  - .idea/misc.xml
-  - .idea/vcs.xml
-  - .idea/workspace.xml
 +- docs/
   - docs/environment-setup.md
-+- HELP.md
 +- mvnw
 +- mvnw.cmd
 +- pom.xml
