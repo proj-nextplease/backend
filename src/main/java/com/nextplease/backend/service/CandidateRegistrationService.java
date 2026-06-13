@@ -19,81 +19,100 @@ import java.util.HexFormat;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class CandidateRegistrationService {
 
+    private static final Logger log = LoggerFactory.getLogger(CandidateRegistrationService.class);
+
     private static final int OTP_TTL_MINUTES = 10;
     private static final int MAX_ATTEMPTS = 5;
+    /** Minimum seconds between OTP requests for the same email to prevent spam. */
+    private static final int OTP_COOLDOWN_SECONDS = 60;
     private static final ZoneId VIETNAM_ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
 
     private final NamedParameterJdbcTemplate jdbcTemplate;
     private final EmailDeliveryService emailDeliveryService;
+    private final SupabaseAdminService supabaseAdminService;
     private final SecureRandom secureRandom = new SecureRandom();
+    private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
     private final boolean exposeDevOtp;
 
     public CandidateRegistrationService(
             NamedParameterJdbcTemplate jdbcTemplate,
             EmailDeliveryService emailDeliveryService,
+            SupabaseAdminService supabaseAdminService,
             @Value("${app.auth.registration.expose-dev-otp:true}") boolean exposeDevOtp
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.emailDeliveryService = emailDeliveryService;
+        this.supabaseAdminService = supabaseAdminService;
         this.exposeDevOtp = exposeDevOtp;
     }
 
+    /**
+     * Step 1: Validate form data, store password hash, generate OTP, send OTP email.
+     * The Supabase auth user is NOT created here – it is deferred to verifyOtp().
+     */
     @Transactional
     public CandidateRegistrationOtpResponse requestOtp(CandidateRegistrationOtpRequest request) {
         String normalizedEmail = normalizeEmail(request.email());
         String normalizedStudentEmail = normalizeEmail(request.studentEmail());
-        ensureCandidateDoesNotExist(request.supabaseUserId(), normalizedEmail);
+        ensureCandidateDoesNotExist(normalizedEmail);
 
+        // Enforce cooldown: reject if a PENDING attempt was created less than OTP_COOLDOWN_SECONDS ago
+        enforceCooldown(normalizedEmail);
+
+        // Revoke all previous pending attempts for this email
         jdbcTemplate.update("""
                 update candidate_registration_attempts
                 set status = 'REVOKED'
                 where status = 'PENDING'
-                  and (supabase_user_id = :supabaseUserId or lower(email) = :email)
+                  and lower(email) = :email
                 """, Map.of(
-                "supabaseUserId", request.supabaseUserId(),
                 "email", normalizedEmail
         ));
 
         String otp = generateOtp();
         Instant expiresAt = Instant.now().plus(OTP_TTL_MINUTES, ChronoUnit.MINUTES);
+        String passwordHash = passwordEncoder.encode(request.password());
 
         UUID registrationId = jdbcTemplate.queryForObject("""
                 insert into candidate_registration_attempts (
-                    supabase_user_id,
                     email,
                     display_name,
                     student_email,
                     otp_hash_sha256,
+                    password_hash,
                     max_attempts,
                     expires_at
                 )
                 values (
-                    :supabaseUserId,
                     :email,
                     :displayName,
                     :studentEmail,
                     :otpHash,
+                    :passwordHash,
                     :maxAttempts,
                     :expiresAt
                 )
                 returning id
                 """, new MapSqlParameterSource()
-                .addValue("supabaseUserId", request.supabaseUserId())
                 .addValue("email", normalizedEmail)
                 .addValue("displayName", request.displayName().trim())
                 .addValue("studentEmail", normalizedStudentEmail)
                 .addValue("otpHash", sha256(otp))
+                .addValue("passwordHash", passwordHash)
                 .addValue("maxAttempts", MAX_ATTEMPTS)
                 .addValue("expiresAt", Timestamp.from(expiresAt)), UUID.class);
 
@@ -124,6 +143,9 @@ public class CandidateRegistrationService {
         );
     }
 
+    /**
+     * Step 2: Verify OTP, create Supabase auth user (server-side), create app_user + profile + wallet.
+     */
     @Transactional
     public CandidateRegistrationCompleteResponse verifyOtp(CandidateRegistrationVerifyRequest request) {
         CandidateRegistrationAttempt attempt = findAttemptForUpdate(request.registrationId());
@@ -157,7 +179,33 @@ public class CandidateRegistrationService {
             throw new AppException(HttpStatus.BAD_REQUEST, "Invalid registration OTP");
         }
 
-        ensureCandidateDoesNotExist(attempt.supabaseUserId(), attempt.email());
+        ensureCandidateDoesNotExist(attempt.email());
+
+        // Verify the password matches what was submitted in the OTP request step
+        if (attempt.passwordHash() != null && !passwordEncoder.matches(request.password(), attempt.passwordHash())) {
+            throw new AppException(HttpStatus.BAD_REQUEST, "Mật khẩu không khớp với thông tin đã đăng ký. Vui lòng nhập lại.");
+        }
+
+        // --- Create Supabase auth user server-side (email already confirmed, no email sent) ---
+        UUID supabaseUserId = supabaseAdminService.createUser(
+                attempt.email(),
+                request.password(),
+                Map.of(
+                        "display_name", attempt.displayName(),
+                        "student_email", attempt.studentEmail(),
+                        "role_intent", "candidate_free"
+                )
+        );
+
+        // Update the registration attempt with the Supabase user ID
+        jdbcTemplate.update("""
+                update candidate_registration_attempts
+                set supabase_user_id = :supabaseUserId
+                where id = :id
+                """, Map.of(
+                "supabaseUserId", supabaseUserId,
+                "id", attempt.id()
+        ));
 
         UUID userId = jdbcTemplate.queryForObject("""
                 insert into app_users (
@@ -178,7 +226,7 @@ public class CandidateRegistrationService {
                 )
                 returning id
                 """, new MapSqlParameterSource()
-                .addValue("supabaseUserId", attempt.supabaseUserId())
+                .addValue("supabaseUserId", supabaseUserId)
                 .addValue("email", attempt.email())
                 .addValue("displayName", attempt.displayName()), UUID.class);
 
@@ -227,13 +275,14 @@ public class CandidateRegistrationService {
         jdbcTemplate.update("""
                 update candidate_registration_attempts
                 set status = 'VERIFIED',
-                    verified_at = now()
+                    verified_at = now(),
+                    password_hash = null
                 where id = :id
                 """, Map.of("id", attempt.id()));
 
         return new CandidateRegistrationCompleteResponse(
                 userId,
-                attempt.supabaseUserId(),
+                supabaseUserId,
                 profileId,
                 attempt.email(),
                 attempt.displayName(),
@@ -242,19 +291,39 @@ public class CandidateRegistrationService {
         );
     }
 
-    private void ensureCandidateDoesNotExist(UUID supabaseUserId, String email) {
+    private void ensureCandidateDoesNotExist(String email) {
         Integer existingCount = jdbcTemplate.queryForObject("""
                 select count(*)
                 from app_users
-                where supabase_user_id = :supabaseUserId
-                   or lower(email) = :email
+                where lower(email) = :email
                 """, Map.of(
-                "supabaseUserId", supabaseUserId,
                 "email", normalizeEmail(email)
         ), Integer.class);
 
         if (existingCount != null && existingCount > 0) {
             throw new AppException(HttpStatus.CONFLICT, "Candidate account already exists");
+        }
+    }
+
+    /**
+     * Prevent rapid-fire OTP requests for the same email.
+     * If a PENDING attempt was created less than OTP_COOLDOWN_SECONDS ago, reject.
+     */
+    private void enforceCooldown(String normalizedEmail) {
+        Integer recentCount = jdbcTemplate.queryForObject("""
+                select count(*)
+                from candidate_registration_attempts
+                where lower(email) = :email
+                  and status = 'PENDING'
+                  and created_at > now() - interval '1 second' * :cooldown
+                """, Map.of(
+                "email", normalizedEmail,
+                "cooldown", OTP_COOLDOWN_SECONDS
+        ), Integer.class);
+
+        if (recentCount != null && recentCount > 0) {
+            throw new AppException(HttpStatus.TOO_MANY_REQUESTS,
+                    "Vui lòng đợi " + OTP_COOLDOWN_SECONDS + " giây trước khi yêu cầu mã OTP mới.");
         }
     }
 
@@ -267,6 +336,7 @@ public class CandidateRegistrationService {
                            display_name,
                            student_email,
                            otp_hash_sha256,
+                           password_hash,
                            status,
                            attempts,
                            max_attempts,
@@ -281,6 +351,7 @@ public class CandidateRegistrationService {
                     rs.getString("display_name"),
                     rs.getString("student_email"),
                     rs.getString("otp_hash_sha256"),
+                    rs.getString("password_hash"),
                     rs.getString("status"),
                     rs.getInt("attempts"),
                     rs.getInt("max_attempts"),
@@ -353,6 +424,7 @@ public class CandidateRegistrationService {
             String displayName,
             String studentEmail,
             String otpHashSha256,
+            String passwordHash,
             String status,
             int attempts,
             int maxAttempts,

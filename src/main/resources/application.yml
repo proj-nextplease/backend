@@ -56,6 +56,9 @@ app:
   security:
     jwt:
       enabled: ${APP_SECURITY_JWT_ENABLED:false}
+  supabase:
+    url: ${SUPABASE_PROJECT_URL:}
+    service-role-key: ${SUPABASE_SERVICE_ROLE_KEY:}
   auth:
     registration:
       expose-dev-otp: ${APP_AUTH_REGISTRATION_EXPOSE_DEV_OTP:false}
