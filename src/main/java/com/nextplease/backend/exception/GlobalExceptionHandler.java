@@ -1,6 +1,9 @@
 package com.nextplease.backend.exception;
 
 import com.nextplease.backend.dto.response.ApiResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
@@ -11,6 +14,13 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+    @ExceptionHandler(AppException.class)
+    ResponseEntity<ApiResponse<Void>> handleAppException(AppException exception) {
+        return ResponseEntity.status(exception.getStatus()).body(ApiResponse.error(exception.getMessage()));
+    }
 
     @ExceptionHandler(ResourceNotFoundException.class)
     ResponseEntity<ApiResponse<Void>> handleNotFound(ResourceNotFoundException exception) {
@@ -32,8 +42,16 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(ApiResponse.error(exception.getMessage()));
     }
 
+    @ExceptionHandler(DataAccessException.class)
+    ResponseEntity<ApiResponse<Void>> handleDatabase(DataAccessException exception) {
+        log.error("Database operation failed", exception);
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(ApiResponse.error("Database is temporarily unavailable. Please retry in a moment."));
+    }
+
     @ExceptionHandler(Exception.class)
     ResponseEntity<ApiResponse<Void>> handleUnexpected(Exception exception) {
+        log.error("Unexpected application error", exception);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(ApiResponse.error("Unexpected server error"));
     }
