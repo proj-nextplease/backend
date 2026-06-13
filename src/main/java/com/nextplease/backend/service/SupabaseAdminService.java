@@ -111,4 +111,82 @@ public class SupabaseAdminService {
                     "Không thể tạo tài khoản trên Supabase Auth. Vui lòng thử lại sau.");
         }
     }
+
+    /**
+     * Authenticates a user with email and password via Supabase Auth API.
+     *
+     * @return response containing token details
+     */
+    public Map<String, Object> authenticateUser(String email, String password) {
+        if (!enabled) {
+            log.info("SupabaseAdminService disabled – returning mock authentication response for {}", email);
+            UUID mockSub = UUID.randomUUID();
+            String mockJwt = generateMockJwt(email, mockSub);
+            return Map.of(
+                    "access_token", mockJwt,
+                    "refresh_token", "mock-refresh-token-" + UUID.randomUUID(),
+                    "token_type", "bearer",
+                    "expires_in", 3600L,
+                    "user", Map.of(
+                            "id", mockSub.toString(),
+                            "email", email
+                    )
+            );
+        }
+
+        try {
+            Map<String, Object> body = Map.of(
+                    "email", email,
+                    "password", password
+            );
+
+            return restClient.post()
+                    .uri("/auth/v1/token?grant_type=password")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .onStatus(HttpStatusCode::is4xxClientError, (req, res) -> {
+                        String responseBody = new String(res.getBody().readAllBytes());
+                        log.error("Supabase Auth Token API 4xx: {} – {}", res.getStatusCode(), responseBody);
+
+                        if (res.getStatusCode().value() == 400) {
+                            throw new AppException(HttpStatus.BAD_REQUEST,
+                                    "Email hoặc mật khẩu không chính xác.");
+                        }
+
+                        throw new AppException(HttpStatus.BAD_REQUEST,
+                                "Đăng nhập thất bại: " + responseBody);
+                    })
+                    .onStatus(HttpStatusCode::is5xxServerError, (req, res) -> {
+                        String responseBody = new String(res.getBody().readAllBytes());
+                        log.error("Supabase Auth Token API 5xx: {} – {}", res.getStatusCode(), responseBody);
+                        throw new AppException(HttpStatus.BAD_GATEWAY,
+                                "Supabase Auth đang gặp sự cố. Vui lòng thử lại sau.");
+                    })
+                    .body(new ParameterizedTypeReference<>() {
+                    });
+        } catch (AppException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("Failed to authenticate Supabase user for email {}", email, e);
+            throw new AppException(HttpStatus.BAD_GATEWAY,
+                    "Không thể xác thực thông tin đăng nhập trên Supabase. Vui lòng thử lại sau.");
+        }
+    }
+
+    private String generateMockJwt(String email, UUID supabaseUserId) {
+        String header = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}";
+        String payload = String.format(
+                "{\"sub\":\"%s\",\"email\":\"%s\",\"app_metadata\":{\"provider\":\"email\",\"roles\":[\"candidate_free\"]},\"exp\":%d}",
+                supabaseUserId,
+                email,
+                (System.currentTimeMillis() / 1000) + 3600
+        );
+
+        java.util.Base64.Encoder encoder = java.util.Base64.getUrlEncoder().withoutPadding();
+        String encodedHeader = encoder.encodeToString(header.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        String encodedPayload = encoder.encodeToString(payload.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        return encodedHeader + "." + encodedPayload + ".mock_signature";
+    }
 }
