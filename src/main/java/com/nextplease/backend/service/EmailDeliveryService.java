@@ -1,44 +1,57 @@
 package com.nextplease.backend.service;
 
-import jakarta.mail.MessagingException;
-import jakarta.mail.internet.MimeMessage;
-import java.io.UnsupportedEncodingException;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
-import org.springframework.beans.factory.ObjectProvider;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.mail.MailException;
-import org.springframework.mail.javamail.JavaMailSender;
-import org.springframework.mail.javamail.MimeMessageHelper;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestClient;
 
 @Service
 public class EmailDeliveryService {
 
+    private static final Logger log = LoggerFactory.getLogger(EmailDeliveryService.class);
+
     private static final DateTimeFormatter VIETNAM_TIME_FORMATTER =
             DateTimeFormatter.ofPattern("HH:mm 'ngày' dd/MM/yyyy", Locale.forLanguageTag("vi-VN"));
 
-    private final Optional<JavaMailSender> mailSender;
+    private final RestClient restClient;
     private final boolean enabled;
     private final String fromAddress;
     private final String fromName;
 
     public EmailDeliveryService(
-            ObjectProvider<JavaMailSender> mailSenderProvider,
             @Value("${app.mail.enabled:false}") boolean enabled,
             @Value("${app.mail.from-address:no-reply@nextplease.vn}") String fromAddress,
-            @Value("${app.mail.from-name:nextplease}") String fromName
+            @Value("${app.mail.from-name:nextplease}") String fromName,
+            @Value("${app.mail.brevo-api-key:}") String brevoApiKey
     ) {
-        this.mailSender = Optional.ofNullable(mailSenderProvider.getIfAvailable());
-        this.enabled = enabled;
         this.fromAddress = fromAddress;
         this.fromName = fromName;
+        this.enabled = enabled && brevoApiKey != null && !brevoApiKey.isBlank();
+
+        if (this.enabled) {
+            this.restClient = RestClient.builder()
+                    .baseUrl("https://api.brevo.com/v3")
+                    .defaultHeader("accept", "application/json")
+                    .defaultHeader("api-key", brevoApiKey)
+                    .defaultHeader("content-type", "application/json")
+                    .build();
+            log.info("EmailDeliveryService initialized using Brevo API.");
+        } else {
+            this.restClient = null;
+            log.warn("EmailDeliveryService is disabled (either app.mail.enabled is false or brevo-api-key is missing).");
+        }
     }
 
     public boolean isEnabled() {
-        return enabled && mailSender.isPresent();
+        return enabled;
     }
 
     public void sendCandidateRegistrationOtp(
@@ -51,16 +64,31 @@ public class EmailDeliveryService {
             return;
         }
 
+        String subject = "Mã OTP xác thực ứng viên nextplease";
+        String textContent = buildCandidateOtpText(displayName, otp, expiresAt);
+        String htmlContent = buildCandidateOtpHtml(displayName, otp, expiresAt);
+
         try {
-            MimeMessage message = mailSender.orElseThrow().createMimeMessage();
-            MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
-            helper.setFrom(fromAddress, fromName);
-            helper.setTo(recipientEmail);
-            helper.setSubject("Mã OTP xác thực ứng viên nextplease");
-            helper.setText(buildCandidateOtpText(displayName, otp, expiresAt), buildCandidateOtpHtml(displayName, otp, expiresAt));
-            mailSender.orElseThrow().send(message);
-        } catch (IllegalStateException | MessagingException | MailException | UnsupportedEncodingException exception) {
-            throw new EmailSendException("Could not send candidate registration OTP email", exception);
+            Map<String, Object> requestBody = Map.of(
+                    "sender", Map.of("name", fromName, "email", fromAddress),
+                    "to", List.of(Map.of("email", recipientEmail, "name", normalizeDisplayName(displayName))),
+                    "subject", subject,
+                    "htmlContent", htmlContent,
+                    "textContent", textContent
+            );
+
+            restClient.post()
+                    .uri("/smtp/email")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(requestBody)
+                    .retrieve()
+                    .toBodilessEntity();
+
+            log.info("Successfully sent candidate registration OTP email to={} via Brevo API", recipientEmail);
+        } catch (Exception exception) {
+            log.error("Failed to send candidate registration OTP email to={} via Brevo API: {}",
+                    recipientEmail, exception.getMessage(), exception);
+            throw new EmailSendException("Could not send candidate registration OTP email: " + exception.getMessage(), exception);
         }
     }
 
@@ -123,8 +151,8 @@ public class EmailDeliveryService {
                         </td>
                       </tr>
                     </table>
-                  </body>
-                </html>
+                  </td>
+                </tr>
                 """.formatted(safeName, safeOtp, safeExpiresAt);
     }
 

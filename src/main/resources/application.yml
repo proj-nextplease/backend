@@ -66,6 +66,7 @@ app:
     enabled: ${APP_MAIL_ENABLED:false}
     from-address: ${APP_MAIL_FROM_ADDRESS:no-reply@nextplease.vn}
     from-name: ${APP_MAIL_FROM_NAME:nextplease}
+    brevo-api-key: ${BREVO_API_KEY:}
 
 management:
   endpoints:
