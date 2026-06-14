@@ -139,8 +139,8 @@ public class ProfileService {
         }
 
         // 4. Parse JSON columns
-        Map<String, Object> avatarConfig = parseJsonMap((String) profile.get("avatar_config"));
-        List<CredentialDto> credentials = parseCredentialsJson((String) profile.get("credentials"));
+        Map<String, Object> avatarConfig = parseJsonMap(getJsonString(profile.get("avatar_config")));
+        List<CredentialDto> credentials = parseCredentialsJson(getJsonString(profile.get("credentials")));
 
         // 5. Get skills
         List<String> skills = jdbcTemplate.query("""
@@ -396,5 +396,22 @@ public class ProfileService {
             log.error("Failed to parse credentials JSON: {}", json, e);
             return new ArrayList<>();
         }
+    }
+
+    private String getJsonString(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof String) {
+            return (String) value;
+        }
+        if (value.getClass().getName().equals("org.postgresql.util.PGobject")) {
+            try {
+                return (String) value.getClass().getMethod("getValue").invoke(value);
+            } catch (Exception e) {
+                log.error("Failed to extract JSON string via reflection", e);
+            }
+        }
+        return value.toString();
     }
 }
