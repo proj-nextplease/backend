@@ -14,6 +14,11 @@ public record PortfolioResponse(
         List<String> skills,
         Map<String, Object> avatar,
         List<ExperienceDto> experiences,
-        List<CredentialDto> credentials
+        List<CredentialDto> credentials,
+        boolean onboardingCompleted,
+        int reputationScore,
+        long totalExp,
+        int currentLevel,
+        long npBalance
 ) {
 }

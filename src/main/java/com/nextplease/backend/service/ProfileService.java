@@ -87,11 +87,14 @@ public class ProfileService {
     public PortfolioResponse getPortfolio() {
         UUID supabaseUserId = getCurrentUserSupabaseId();
 
-        // 1. Get user details from app_users
+        // 1. Get user details from app_users and wallet
         Map<String, Object> user;
         try {
             user = jdbcTemplate.queryForMap("""
-                    select id, display_name, email from app_users where supabase_user_id = :supabaseUserId
+                    select u.id, u.display_name, u.email, coalesce(w.np_balance, 0) as np_balance
+                    from app_users u
+                    left join wallets w on w.user_id = u.id
+                    where u.supabase_user_id = :supabaseUserId
                     """, Map.of("supabaseUserId", supabaseUserId));
         } catch (EmptyResultDataAccessException e) {
             throw new ResourceNotFoundException("Tài khoản người dùng chưa được khởi tạo.");
@@ -104,7 +107,7 @@ public class ProfileService {
         Map<String, Object> profile;
         try {
             profile = jdbcTemplate.queryForMap("""
-                    select id, headline, bio, location, school_id, avatar_config, credentials 
+                    select id, headline, bio, location, school_id, avatar_config, credentials, onboarding_completed, reputation_score, total_exp, current_level 
                     from profiles where user_id = :userId
                     """, Map.of("userId", userId));
         } catch (EmptyResultDataAccessException e) {
@@ -116,7 +119,7 @@ public class ProfileService {
                     """, Map.of("id", profileId, "userId", userId));
 
             profile = jdbcTemplate.queryForMap("""
-                    select id, headline, bio, location, school_id, avatar_config, credentials 
+                    select id, headline, bio, location, school_id, avatar_config, credentials, onboarding_completed, reputation_score, total_exp, current_level 
                     from profiles where user_id = :userId
                     """, Map.of("userId", userId));
         }
@@ -163,6 +166,12 @@ public class ProfileService {
                         formatMmYy(rs.getDate("ended_at"))
                 ));
 
+        boolean onboardingCompleted = profile.get("onboarding_completed") != null && (Boolean) profile.get("onboarding_completed");
+        int reputationScore = profile.get("reputation_score") != null ? ((Number) profile.get("reputation_score")).intValue() : 0;
+        long totalExp = profile.get("total_exp") != null ? ((Number) profile.get("total_exp")).longValue() : 0L;
+        int currentLevel = profile.get("current_level") != null ? ((Number) profile.get("current_level")).intValue() : 1;
+        long npBalance = user.get("np_balance") != null ? ((Number) user.get("np_balance")).longValue() : 0L;
+
         return new PortfolioResponse(
                 displayName,
                 headline,
@@ -172,7 +181,12 @@ public class ProfileService {
                 skills,
                 avatarConfig,
                 experiences,
-                credentials
+                credentials,
+                onboardingCompleted,
+                reputationScore,
+                totalExp,
+                currentLevel,
+                npBalance
         );
     }
 
@@ -240,6 +254,7 @@ public class ProfileService {
                     school_id = :schoolId,
                     avatar_config = cast(:avatarConfig as jsonb),
                     credentials = cast(:credentials as jsonb),
+                    onboarding_completed = true,
                     updated_at = now()
                 where id = :profileId
                 """, new MapSqlParameterSource()
