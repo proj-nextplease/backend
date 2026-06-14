@@ -15,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,13 +27,16 @@ public class CurrentUserService {
 
     private final AppUserRepository appUserRepository;
     private final ObjectMapper objectMapper;
+    private final NamedParameterJdbcTemplate jdbcTemplate;
 
     public CurrentUserService(
             AppUserRepository appUserRepository,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            NamedParameterJdbcTemplate jdbcTemplate
     ) {
         this.appUserRepository = appUserRepository;
         this.objectMapper = objectMapper;
+        this.jdbcTemplate = jdbcTemplate;
     }
 
     private HttpServletRequest getCurrentRequest() {
@@ -44,11 +48,45 @@ public class CurrentUserService {
         return null;
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public MeResponse getCurrentUser() {
         UUID supabaseUserId = resolveSupabaseUserId();
-        AppUser appUser = appUserRepository.findBySupabaseUserId(supabaseUserId)
-                .orElseThrow(() -> new ResourceNotFoundException("App user profile has not been created"));
+        AppUser appUser;
+        try {
+            appUser = appUserRepository.findBySupabaseUserId(supabaseUserId)
+                    .orElseGet(() -> {
+                        Map<String, Object> claims = getJwtClaims();
+                        Object emailObj = claims.get("email");
+                        String email = emailObj instanceof String ? (String) emailObj : "";
+                        if (email.isBlank()) {
+                            throw new ResourceNotFoundException("Tài khoản người dùng chưa được khởi tạo.");
+                        }
+
+                        String displayName = "";
+                        Object userMetadata = claims.get("user_metadata");
+                        if (userMetadata instanceof Map<?, ?> metadataMap) {
+                            Object fullName = metadataMap.get("full_name");
+                            if (fullName instanceof String fullNameStr) {
+                                displayName = fullNameStr;
+                            }
+                        }
+                        if (displayName.isBlank()) {
+                            Object nameObj = claims.get("name");
+                            if (nameObj instanceof String nameStr) {
+                                displayName = nameStr;
+                            }
+                        }
+                        if (displayName.isBlank()) {
+                            displayName = email.split("@")[0];
+                        }
+
+                        return provisionLocalUserJit(supabaseUserId, email, displayName);
+                    });
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            log.info("Concurrent JIT provisioning detected in CurrentUserService for user: {}. Fetching existing user.", supabaseUserId);
+            appUser = appUserRepository.findBySupabaseUserId(supabaseUserId)
+                    .orElseThrow(() -> new ResourceNotFoundException("Không thể tìm thấy hoặc khởi tạo thông tin ứng viên cục bộ."));
+        }
 
         return new MeResponse(
                 appUser.getId(),
@@ -142,6 +180,92 @@ public class CurrentUserService {
         }
 
         return Set.of();
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> getJwtClaims() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication instanceof JwtAuthenticationToken jwtAuthenticationToken) {
+            return jwtAuthenticationToken.getToken().getClaims();
+        }
+
+        HttpServletRequest request = getCurrentRequest();
+        if (request != null) {
+            String authHeader = request.getHeader("Authorization");
+            if (authHeader != null && authHeader.startsWith("Bearer ")) {
+                String token = authHeader.substring(7);
+                try {
+                    String[] parts = token.split("\\.");
+                    if (parts.length >= 2) {
+                        String payloadJson = new String(Base64.getUrlDecoder().decode(parts[1]));
+                        return objectMapper.readValue(payloadJson, Map.class);
+                    }
+                } catch (Exception e) {
+                    log.warn("Failed to parse JWT token manually from header: {}", e.getMessage());
+                }
+            }
+        }
+        return Map.of();
+    }
+
+    private AppUser provisionLocalUserJit(UUID supabaseUserId, String email, String displayName) {
+        UUID userId = UUID.randomUUID();
+        log.info("JIT provisioning local database records for Supabase user via /me: {} (email: {})", supabaseUserId, email);
+
+        jdbcTemplate.update("""
+                insert into app_users (
+                    id,
+                    supabase_user_id,
+                    email,
+                    display_name,
+                    status,
+                    created_at,
+                    updated_at
+                )
+                values (
+                    :userId,
+                    :supabaseUserId,
+                    :email,
+                    :displayName,
+                    'ACTIVE',
+                    now(),
+                    now()
+                )
+                """, Map.of(
+                "userId", userId,
+                "supabaseUserId", supabaseUserId,
+                "email", email.toLowerCase().trim(),
+                "displayName", displayName
+        ));
+
+        jdbcTemplate.update("""
+                insert into user_roles (user_id, role_code)
+                values (:userId, 'candidate_free')
+                """, Map.of("userId", userId));
+
+        jdbcTemplate.update("""
+                insert into profiles (user_id, headline, visibility)
+                values (:userId, 'Ứng viên nextplease', '{}'::jsonb)
+                """, Map.of("userId", userId));
+
+        jdbcTemplate.update("""
+                insert into wallets (user_id, np_balance, locked_np_balance)
+                values (:userId, 0, 0)
+                """, Map.of("userId", userId));
+
+        jdbcTemplate.update("""
+                insert into audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
+                values (
+                    :userId,
+                    'candidate.jit_provisioned',
+                    'app_user',
+                    :userId,
+                    jsonb_build_object('provider', 'social_oauth')
+                )
+                """, Map.of("userId", userId));
+
+        return appUserRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("Không thể tìm thấy thông tin ứng viên vừa được khởi tạo JIT."));
     }
 }
 

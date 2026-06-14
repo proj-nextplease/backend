@@ -83,7 +83,7 @@ public class ProfileService {
     }
 
 
-    @Transactional(readOnly = true)
+    @Transactional
     public PortfolioResponse getPortfolio() {
         UUID supabaseUserId = getCurrentUserSupabaseId();
 
@@ -97,7 +97,43 @@ public class ProfileService {
                     where u.supabase_user_id = :supabaseUserId
                     """, Map.of("supabaseUserId", supabaseUserId));
         } catch (EmptyResultDataAccessException e) {
-            throw new ResourceNotFoundException("Tài khoản người dùng chưa được khởi tạo.");
+            // User does not exist locally -> JIT Provisioning (OAuth flow fallback)
+            Map<String, Object> claims = getJwtClaims();
+            Object emailObj = claims.get("email");
+            String email = emailObj instanceof String ? (String) emailObj : "";
+            if (email.isBlank()) {
+                throw new ResourceNotFoundException("Tài khoản người dùng chưa được khởi tạo.");
+            }
+
+            String displayName = "";
+            Object userMetadata = claims.get("user_metadata");
+            if (userMetadata instanceof Map<?, ?> metadataMap) {
+                Object fullName = metadataMap.get("full_name");
+                if (fullName instanceof String fullNameStr) {
+                    displayName = fullNameStr;
+                }
+            }
+            if (displayName.isBlank()) {
+                Object nameObj = claims.get("name");
+                if (nameObj instanceof String nameStr) {
+                    displayName = nameStr;
+                }
+            }
+            if (displayName.isBlank()) {
+                displayName = email.split("@")[0];
+            }
+            
+            try {
+                user = provisionLocalUserJit(supabaseUserId, email, displayName);
+            } catch (org.springframework.dao.DataIntegrityViolationException dive) {
+                log.info("Concurrent JIT provisioning detected in ProfileService.getPortfolio for user {}. Querying existing user details.", supabaseUserId);
+                user = jdbcTemplate.queryForMap("""
+                        select u.id, u.display_name, u.email, coalesce(w.np_balance, 0) as np_balance
+                        from app_users u
+                        left join wallets w on w.user_id = u.id
+                        where u.supabase_user_id = :supabaseUserId
+                        """, Map.of("supabaseUserId", supabaseUserId));
+            }
         }
 
         UUID userId = (UUID) user.get("id");
@@ -201,7 +237,45 @@ public class ProfileService {
                     select id from app_users where supabase_user_id = :supabaseUserId
                     """, Map.of("supabaseUserId", supabaseUserId), UUID.class);
         } catch (EmptyResultDataAccessException e) {
-            throw new ResourceNotFoundException("Tài khoản người dùng chưa được khởi tạo.");
+            // User does not exist locally -> JIT Provisioning (OAuth flow fallback)
+            Map<String, Object> claims = getJwtClaims();
+            Object emailObj = claims.get("email");
+            String email = emailObj instanceof String ? (String) emailObj : "";
+            if (email.isBlank()) {
+                throw new ResourceNotFoundException("Tài khoản người dùng chưa được khởi tạo.");
+            }
+
+            String displayName = "";
+            Object userMetadata = claims.get("user_metadata");
+            if (userMetadata instanceof Map<?, ?> metadataMap) {
+                Object fullName = metadataMap.get("full_name");
+                if (fullName instanceof String fullNameStr) {
+                    displayName = fullNameStr;
+                }
+            }
+            if (displayName.isBlank()) {
+                Object nameObj = claims.get("name");
+                if (nameObj instanceof String nameStr) {
+                    displayName = nameStr;
+                }
+            }
+            if (displayName.isBlank()) {
+                displayName = email.split("@")[0];
+            }
+            
+            Map<String, Object> newUser;
+            try {
+                newUser = provisionLocalUserJit(supabaseUserId, email, displayName);
+            } catch (org.springframework.dao.DataIntegrityViolationException dive) {
+                log.info("Concurrent JIT provisioning detected in ProfileService.updatePortfolio for user {}. Fetching existing user details.", supabaseUserId);
+                newUser = jdbcTemplate.queryForMap("""
+                        select u.id, u.display_name, u.email, coalesce(w.np_balance, 0) as np_balance
+                        from app_users u
+                        left join wallets w on w.user_id = u.id
+                        where u.supabase_user_id = :supabaseUserId
+                        """, Map.of("supabaseUserId", supabaseUserId));
+            }
+            userId = (UUID) newUser.get("id");
         }
 
         // 2. Find profile ID or create if not exists
@@ -430,4 +504,95 @@ public class ProfileService {
         }
         return value.toString();
     }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> getJwtClaims() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication instanceof JwtAuthenticationToken jwtAuthenticationToken) {
+            return jwtAuthenticationToken.getToken().getClaims();
+        }
+
+        HttpServletRequest request = getCurrentRequest();
+        if (request != null) {
+            String authHeader = request.getHeader("Authorization");
+            if (authHeader != null && authHeader.startsWith("Bearer ")) {
+                String token = authHeader.substring(7);
+                try {
+                    String[] parts = token.split("\\.");
+                    if (parts.length >= 2) {
+                        String payloadJson = new String(Base64.getUrlDecoder().decode(parts[1]));
+                        return objectMapper.readValue(payloadJson, Map.class);
+                    }
+                } catch (Exception e) {
+                    log.warn("Failed to parse JWT token manually from header: {}", e.getMessage());
+                }
+            }
+        }
+        return Map.of();
+    }
+
+    private Map<String, Object> provisionLocalUserJit(UUID supabaseUserId, String email, String displayName) {
+        UUID userId = UUID.randomUUID();
+        log.info("JIT provisioning local database records for Supabase user: {} (email: {})", supabaseUserId, email);
+
+        jdbcTemplate.update("""
+                insert into app_users (
+                    id,
+                    supabase_user_id,
+                    email,
+                    display_name,
+                    status,
+                    created_at,
+                    updated_at
+                )
+                values (
+                    :userId,
+                    :supabaseUserId,
+                    :email,
+                    :displayName,
+                    'ACTIVE',
+                    now(),
+                    now()
+                )
+                """, Map.of(
+                "userId", userId,
+                "supabaseUserId", supabaseUserId,
+                "email", email.toLowerCase().trim(),
+                "displayName", displayName
+        ));
+
+        jdbcTemplate.update("""
+                insert into user_roles (user_id, role_code)
+                values (:userId, 'candidate_free')
+                """, Map.of("userId", userId));
+
+        jdbcTemplate.update("""
+                insert into profiles (user_id, headline, visibility)
+                values (:userId, 'Ứng viên nextplease', '{}'::jsonb)
+                """, Map.of("userId", userId));
+
+        jdbcTemplate.update("""
+                insert into wallets (user_id, np_balance, locked_np_balance)
+                values (:userId, 0, 0)
+                """, Map.of("userId", userId));
+
+        jdbcTemplate.update("""
+                insert into audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
+                values (
+                    :userId,
+                    'candidate.jit_provisioned',
+                    'app_user',
+                    :userId,
+                    jsonb_build_object('provider', 'social_oauth')
+                )
+                """, Map.of("userId", userId));
+
+        return Map.of(
+                "id", userId,
+                "display_name", displayName,
+                "email", email,
+                "np_balance", 0L
+        );
+    }
 }
+
