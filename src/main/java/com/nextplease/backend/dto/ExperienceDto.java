@@ -12,6 +12,10 @@ public record ExperienceDto(
         String organization,
         
         @NotBlank(message = "Mô tả không được để trống")
-        String detail
+        String detail,
+        
+        String startDate,
+        
+        String endDate
 ) {
 }

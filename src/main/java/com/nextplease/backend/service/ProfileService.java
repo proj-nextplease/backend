@@ -8,6 +8,7 @@ import com.nextplease.backend.dto.request.PortfolioRequest;
 import com.nextplease.backend.dto.response.PortfolioResponse;
 import com.nextplease.backend.exception.ResourceNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
@@ -150,14 +151,16 @@ public class ProfileService {
 
         // 6. Get experiences
         List<ExperienceDto> experiences = jdbcTemplate.query("""
-                select id, project_name, position, description from experiences
+                select id, project_name, position, description, started_at, ended_at from experiences
                 where profile_id = :profileId
                 order by created_at asc
                 """, Map.of("profileId", profileId), (rs, rowNum) -> new ExperienceDto(
                         rs.getString("id"),
                         rs.getString("position"),
                         rs.getString("project_name"),
-                        rs.getString("description")
+                        rs.getString("description"),
+                        formatMmYy(rs.getDate("started_at")),
+                        formatMmYy(rs.getDate("ended_at"))
                 ));
 
         return new PortfolioResponse(
@@ -314,16 +317,51 @@ public class ProfileService {
                 (exp.organization() == null || exp.organization().trim().isEmpty())) {
                 continue; // Skip empty records
             }
+            LocalDate startDate = parseMmYy(exp.startDate());
+            LocalDate endDate = parseMmYy(exp.endDate());
+
+            MapSqlParameterSource params = new MapSqlParameterSource()
+                    .addValue("profileId", profileId)
+                    .addValue("organization", exp.organization() == null ? "" : exp.organization().trim())
+                    .addValue("title", exp.title() == null ? "" : exp.title().trim())
+                    .addValue("description", exp.detail() == null ? "" : exp.detail().trim())
+                    .addValue("startDate", startDate != null ? java.sql.Date.valueOf(startDate) : null)
+                    .addValue("endDate", endDate != null ? java.sql.Date.valueOf(endDate) : null);
+
             jdbcTemplate.update("""
-                    insert into experiences (id, profile_id, project_name, position, category, description, verification_status, created_at, updated_at)
-                    values (gen_random_uuid(), :profileId, :organization, :title, 'COMPANY_PROJECT', :description, 'PENDING', now(), now())
-                    """, Map.of(
-                    "profileId", profileId,
-                    "organization", exp.organization() == null ? "" : exp.organization().trim(),
-                    "title", exp.title() == null ? "" : exp.title().trim(),
-                    "description", exp.detail() == null ? "" : exp.detail().trim()
-            ));
+                    insert into experiences (id, profile_id, project_name, position, category, description, started_at, ended_at, verification_status, created_at, updated_at)
+                    values (gen_random_uuid(), :profileId, :organization, :title, 'COMPANY_PROJECT', :description, :startDate, :endDate, 'PENDING', now(), now())
+                    """, params);
         }
+    }
+
+    private LocalDate parseMmYy(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return null;
+        }
+        try {
+            String[] parts = value.split("/");
+            if (parts.length != 2) {
+                return null;
+            }
+            int month = Integer.parseInt(parts[0].trim());
+            int year = Integer.parseInt(parts[1].trim());
+            if (year < 100) {
+                year += 2000;
+            }
+            return LocalDate.of(year, month, 1);
+        } catch (Exception e) {
+            log.warn("Failed to parse date string {}: {}", value, e.getMessage());
+            return null;
+        }
+    }
+
+    private String formatMmYy(java.sql.Date date) {
+        if (date == null) {
+            return "";
+        }
+        LocalDate localDate = date.toLocalDate();
+        return String.format("%02d/%02d", localDate.getMonthValue(), localDate.getYear() % 100);
     }
 
     private String serializeJson(Object value) {
