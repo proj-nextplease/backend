@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -27,8 +28,11 @@ public class ProfileController {
     }
 
     @PutMapping("/me")
-    public ApiResponse<String> updateMyPortfolio(@Valid @RequestBody PortfolioRequest request) {
-        profileService.updatePortfolio(request);
+    public ApiResponse<String> updateMyPortfolio(
+            @Valid @RequestBody PortfolioRequest request,
+            @RequestParam(value = "draft", defaultValue = "false") boolean isDraft
+    ) {
+        profileService.updatePortfolio(request, isDraft);
         return ApiResponse.success("Lưu portfolio thành công!");
     }
 }

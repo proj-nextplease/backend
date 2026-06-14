@@ -191,7 +191,7 @@ public class ProfileService {
     }
 
     @Transactional
-    public void updatePortfolio(PortfolioRequest request) {
+    public void updatePortfolio(PortfolioRequest request, boolean isDraft) {
         UUID supabaseUserId = getCurrentUserSupabaseId();
 
         // 1. Find user ID
@@ -254,7 +254,7 @@ public class ProfileService {
                     school_id = :schoolId,
                     avatar_config = cast(:avatarConfig as jsonb),
                     credentials = cast(:credentials as jsonb),
-                    onboarding_completed = true,
+                    onboarding_completed = case when :isDraft = true then onboarding_completed else true end,
                     updated_at = now()
                 where id = :profileId
                 """, new MapSqlParameterSource()
@@ -264,7 +264,8 @@ public class ProfileService {
                 .addValue("schoolId", schoolId)
                 .addValue("avatarConfig", avatarConfigJson)
                 .addValue("credentials", credentialsJson)
-                .addValue("profileId", profileId));
+                .addValue("profileId", profileId)
+                .addValue("isDraft", isDraft));
 
         // 7. Update skills
         updateProfileSkills(profileId, request.skills());
