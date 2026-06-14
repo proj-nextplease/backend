@@ -124,7 +124,26 @@ public class AuthService {
                 """, Map.of("userId", appUser.getId()), String.class);
         Set<String> roles = new HashSet<>(rolesList);
 
-        // 4. Construct LoginResponse
+        // 4. Log the login event
+        try {
+            jdbcTemplate.update("""
+                    insert into audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
+                    values (
+                        :userId,
+                        'user.logged_in',
+                        'app_user',
+                        :userId,
+                        jsonb_build_object('email', :email, 'ip_address', 'local_dev')
+                    )
+                    """, Map.of(
+                    "userId", appUser.getId(),
+                    "email", appUser.getEmail()
+            ));
+        } catch (Exception e) {
+            log.warn("Failed to write login audit log: {}", e.getMessage());
+        }
+
+        // 5. Construct LoginResponse
         return new LoginResponse(
                 accessToken,
                 refreshToken,
