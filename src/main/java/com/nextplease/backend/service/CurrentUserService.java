@@ -80,7 +80,16 @@ public class CurrentUserService {
                             displayName = email.split("@")[0];
                         }
 
-                        return provisionLocalUserJit(supabaseUserId, email, displayName);
+                        String provider = "supabase";
+                        Object appMetadata = claims.get("app_metadata");
+                        if (appMetadata instanceof Map<?, ?> appMetadataMap) {
+                            Object providerObj = appMetadataMap.get("provider");
+                            if (providerObj instanceof String providerStr && !providerStr.isBlank()) {
+                                provider = providerStr;
+                            }
+                        }
+
+                        return provisionLocalUserJit(supabaseUserId, email, displayName, provider);
                     });
         } catch (org.springframework.dao.DataIntegrityViolationException e) {
             log.info("Concurrent JIT provisioning detected in CurrentUserService for user: {}. Fetching existing user.", supabaseUserId);
@@ -208,9 +217,9 @@ public class CurrentUserService {
         return Map.of();
     }
 
-    private AppUser provisionLocalUserJit(UUID supabaseUserId, String email, String displayName) {
+    private AppUser provisionLocalUserJit(UUID supabaseUserId, String email, String displayName, String authProvider) {
         UUID userId = UUID.randomUUID();
-        log.info("JIT provisioning local database records for Supabase user via /me: {} (email: {})", supabaseUserId, email);
+        log.info("JIT provisioning local database records for Supabase user via /me: {} (email: {}, provider: {})", supabaseUserId, email, authProvider);
 
         jdbcTemplate.update("""
                 insert into app_users (
@@ -219,6 +228,7 @@ public class CurrentUserService {
                     email,
                     display_name,
                     status,
+                    auth_provider,
                     created_at,
                     updated_at
                 )
@@ -228,6 +238,7 @@ public class CurrentUserService {
                     :email,
                     :displayName,
                     'ACTIVE',
+                    :authProvider,
                     now(),
                     now()
                 )
@@ -235,7 +246,8 @@ public class CurrentUserService {
                 "userId", userId,
                 "supabaseUserId", supabaseUserId,
                 "email", email.toLowerCase().trim(),
-                "displayName", displayName
+                "displayName", displayName,
+                "authProvider", authProvider
         ));
 
         jdbcTemplate.update("""
@@ -260,9 +272,12 @@ public class CurrentUserService {
                     'candidate.jit_provisioned',
                     'app_user',
                     :userId,
-                    jsonb_build_object('provider', 'social_oauth')
+                    jsonb_build_object('provider', :authProvider)
                 )
-                """, Map.of("userId", userId));
+                """, Map.of(
+                "userId", userId,
+                "authProvider", authProvider
+        ));
 
         return appUserRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Không thể tìm thấy thông tin ứng viên vừa được khởi tạo JIT."));
