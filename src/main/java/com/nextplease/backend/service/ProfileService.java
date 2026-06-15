@@ -123,8 +123,17 @@ public class ProfileService {
                 displayName = email.split("@")[0];
             }
             
+            String provider = "supabase";
+            Object appMetadata = claims.get("app_metadata");
+            if (appMetadata instanceof Map<?, ?> appMetadataMap) {
+                Object providerObj = appMetadataMap.get("provider");
+                if (providerObj instanceof String providerStr && !providerStr.isBlank()) {
+                    provider = providerStr;
+                }
+            }
+
             try {
-                user = provisionLocalUserJit(supabaseUserId, email, displayName);
+                user = provisionLocalUserJit(supabaseUserId, email, displayName, provider);
             } catch (org.springframework.dao.DataIntegrityViolationException dive) {
                 log.info("Concurrent JIT provisioning detected in ProfileService.getPortfolio for user {}. Querying existing user details.", supabaseUserId);
                 user = jdbcTemplate.queryForMap("""
@@ -263,9 +272,18 @@ public class ProfileService {
                 displayName = email.split("@")[0];
             }
             
+            String provider = "supabase";
+            Object appMetadata = claims.get("app_metadata");
+            if (appMetadata instanceof Map<?, ?> appMetadataMap) {
+                Object providerObj = appMetadataMap.get("provider");
+                if (providerObj instanceof String providerStr && !providerStr.isBlank()) {
+                    provider = providerStr;
+                }
+            }
+
             Map<String, Object> newUser;
             try {
-                newUser = provisionLocalUserJit(supabaseUserId, email, displayName);
+                newUser = provisionLocalUserJit(supabaseUserId, email, displayName, provider);
             } catch (org.springframework.dao.DataIntegrityViolationException dive) {
                 log.info("Concurrent JIT provisioning detected in ProfileService.updatePortfolio for user {}. Fetching existing user details.", supabaseUserId);
                 newUser = jdbcTemplate.queryForMap("""
@@ -531,9 +549,9 @@ public class ProfileService {
         return Map.of();
     }
 
-    private Map<String, Object> provisionLocalUserJit(UUID supabaseUserId, String email, String displayName) {
+    private Map<String, Object> provisionLocalUserJit(UUID supabaseUserId, String email, String displayName, String authProvider) {
         UUID userId = UUID.randomUUID();
-        log.info("JIT provisioning local database records for Supabase user: {} (email: {})", supabaseUserId, email);
+        log.info("JIT provisioning local database records for Supabase user: {} (email: {}, provider: {})", supabaseUserId, email, authProvider);
 
         jdbcTemplate.update("""
                 insert into app_users (
@@ -542,6 +560,7 @@ public class ProfileService {
                     email,
                     display_name,
                     status,
+                    auth_provider,
                     created_at,
                     updated_at
                 )
@@ -551,6 +570,7 @@ public class ProfileService {
                     :email,
                     :displayName,
                     'ACTIVE',
+                    :authProvider,
                     now(),
                     now()
                 )
@@ -558,7 +578,8 @@ public class ProfileService {
                 "userId", userId,
                 "supabaseUserId", supabaseUserId,
                 "email", email.toLowerCase().trim(),
-                "displayName", displayName
+                "displayName", displayName,
+                "authProvider", authProvider
         ));
 
         jdbcTemplate.update("""
@@ -583,9 +604,12 @@ public class ProfileService {
                     'candidate.jit_provisioned',
                     'app_user',
                     :userId,
-                    jsonb_build_object('provider', 'social_oauth')
+                    jsonb_build_object('provider', :authProvider)
                 )
-                """, Map.of("userId", userId));
+                """, Map.of(
+                "userId", userId,
+                "authProvider", authProvider
+        ));
 
         return Map.of(
                 "id", userId,
