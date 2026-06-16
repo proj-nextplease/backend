@@ -116,7 +116,7 @@ public class AuthService {
             throw new AppException(HttpStatus.FORBIDDEN, "Tài khoản của bạn hiện đang bị khóa hoặc ngưng hoạt động.");
         }
 
-        // 3. Fetch User Roles
+        // 3. Fetch User Roles from DB
         List<String> rolesList = jdbcTemplate.queryForList("""
                 select role_code
                 from user_roles
@@ -124,7 +124,15 @@ public class AuthService {
                 """, Map.of("userId", appUser.getId()), String.class);
         Set<String> roles = new HashSet<>(rolesList);
 
-        // 4. Log the login event
+        // 4. Sync roles into Supabase app_metadata so the JWT carries them for future requests.
+        //    This ensures SupabaseJwtAuthenticationConverter can extract ROLE_admin etc. from the JWT.
+        try {
+            supabaseAdminService.updateUserAppMetadata(supabaseUserId, roles);
+        } catch (Exception e) {
+            log.warn("Non-fatal: could not sync app_metadata for user {}: {}", supabaseUserId, e.getMessage());
+        }
+
+        // 5. Log the login event
         try {
             jdbcTemplate.update("""
                     insert into audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
