@@ -174,6 +174,69 @@ public class SupabaseAdminService {
         }
     }
 
+    /**
+     * Updates the app_metadata of a Supabase user to include their current roles from DB.
+     * This ensures the Supabase JWT carries the correct roles so Spring Security
+     * can authorize requests via SupabaseJwtAuthenticationConverter.
+     * Called after every login to keep JWT roles in sync with DB.
+     */
+    public void updateUserAppMetadata(UUID supabaseUserId, java.util.Set<String> roles) {
+        if (!enabled) {
+            log.info("SupabaseAdminService disabled – skipping app_metadata update for {}", supabaseUserId);
+            return;
+        }
+        try {
+            Map<String, Object> body = Map.of(
+                    "app_metadata", Map.of("roles", roles)
+            );
+            restClient.put()
+                    .uri("/auth/v1/admin/users/{id}", supabaseUserId)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .onStatus(HttpStatusCode::is4xxClientError, (req, res) -> {
+                        String responseBody = new String(res.getBody().readAllBytes());
+                        log.error("Supabase Admin PUT user 4xx: {} – {}", res.getStatusCode(), responseBody);
+                    })
+                    .onStatus(HttpStatusCode::is5xxServerError, (req, res) -> {
+                        String responseBody = new String(res.getBody().readAllBytes());
+                        log.error("Supabase Admin PUT user 5xx: {} – {}", res.getStatusCode(), responseBody);
+                    })
+                    .toBodilessEntity();
+            log.info("Synced app_metadata roles {} for Supabase user {}", roles, supabaseUserId);
+        } catch (Exception e) {
+            // Non-fatal: login still succeeds; roles will be stale in JWT until next login
+            log.warn("Failed to sync app_metadata for Supabase user {}: {}", supabaseUserId, e.getMessage());
+        }
+    }
+
+    /**
+     * Deletes a user from Supabase Auth. Used for rollback in transactional operations.
+     */
+    public void deleteUser(UUID supabaseUserId) {
+        if (!enabled) {
+            log.info("SupabaseAdminService disabled – skipping deleteUser for mock UUID: {}", supabaseUserId);
+            return;
+        }
+        try {
+            restClient.delete()
+                    .uri("/auth/v1/admin/users/{id}", supabaseUserId)
+                    .retrieve()
+                    .onStatus(HttpStatusCode::is4xxClientError, (req, res) -> {
+                        String responseBody = new String(res.getBody().readAllBytes());
+                        log.error("Supabase Admin DELETE user 4xx: {} – {}", res.getStatusCode(), responseBody);
+                    })
+                    .onStatus(HttpStatusCode::is5xxServerError, (req, res) -> {
+                        String responseBody = new String(res.getBody().readAllBytes());
+                        log.error("Supabase Admin DELETE user 5xx: {} – {}", res.getStatusCode(), responseBody);
+                    })
+                    .toBodilessEntity();
+            log.info("Deleted user from Supabase Auth: {}", supabaseUserId);
+        } catch (Exception e) {
+            log.error("Failed to delete user from Supabase Auth: {}", supabaseUserId, e);
+        }
+    }
+
     private String generateMockJwt(String email, UUID supabaseUserId) {
         String header = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}";
         String payload = String.format(
