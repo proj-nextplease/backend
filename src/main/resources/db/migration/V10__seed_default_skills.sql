@@ -1,0 +1,21 @@
+INSERT INTO skills (name, normalized_name, category) VALUES
+    ('Java', 'java', 'TECH'),
+    ('Python', 'python', 'TECH'),
+    ('JavaScript', 'javascript', 'TECH'),
+    ('React', 'react', 'TECH'),
+    ('SQL', 'sql', 'TECH'),
+    ('Git', 'git', 'TECH'),
+    ('Figma', 'figma', 'DESIGN'),
+    ('Photoshop', 'photoshop', 'DESIGN'),
+    ('Illustrator', 'illustrator', 'DESIGN'),
+    ('UI/UX Design', 'ui_ux_design', 'DESIGN'),
+    ('Marketing', 'marketing', 'BUSINESS'),
+    ('Sales', 'sales', 'BUSINESS'),
+    ('Excel', 'excel', 'BUSINESS'),
+    ('Project Management', 'project_management', 'BUSINESS'),
+    ('Event Planning', 'event_planning', 'MEDIA'),
+    ('Content Writing', 'content_writing', 'MEDIA'),
+    ('Social Media', 'social_media', 'MEDIA'),
+    ('English', 'english', 'LANGUAGE'),
+    ('Translation', 'translation', 'LANGUAGE')
+ON CONFLICT (normalized_name) DO NOTHING;

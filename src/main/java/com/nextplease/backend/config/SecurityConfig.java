@@ -46,6 +46,8 @@ public class SecurityConfig {
         if (jwtEnabled) {
             http.authorizeHttpRequests(auth -> auth
                             .requestMatchers(HttpMethod.GET, "/api/v1/health").permitAll()
+                            .requestMatchers(HttpMethod.GET, "/api/v1/jobs/**").permitAll()
+                            .requestMatchers(HttpMethod.GET, "/api/v1/skills").permitAll()
                             .requestMatchers(HttpMethod.POST, "/api/v1/auth/candidates/register/**").permitAll()
                             .requestMatchers(HttpMethod.POST, "/api/v1/auth/b2b/register").permitAll()
                             .requestMatchers(HttpMethod.POST, "/api/v1/auth/login").permitAll()

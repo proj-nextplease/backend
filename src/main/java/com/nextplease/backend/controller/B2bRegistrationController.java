@@ -1,6 +1,7 @@
 package com.nextplease.backend.controller;
 
 import com.nextplease.backend.dto.request.B2bRegistrationRequest;
+import com.nextplease.backend.dto.request.B2bUpdateRequest;
 import com.nextplease.backend.dto.response.ApiResponse;
 import com.nextplease.backend.service.B2bRegistrationService;
 import jakarta.validation.Valid;
@@ -42,6 +43,13 @@ public class B2bRegistrationController {
         String documentUrl = body.get("documentUrl");
         b2bRegistrationService.updateCompanyDocument(currentUser.appUserId(), documentUrl);
         return ApiResponse.success("Cập nhật tài liệu minh chứng thành công! Hồ sơ của bạn đã được gửi phê duyệt lại.");
+    }
+
+    @PostMapping("/company/update")
+    public ApiResponse<String> updateCompanyProfile(@Valid @RequestBody B2bUpdateRequest request) {
+        com.nextplease.backend.dto.response.MeResponse currentUser = currentUserService.getCurrentUser();
+        b2bRegistrationService.updateCompanyProfile(currentUser.appUserId(), request);
+        return ApiResponse.success("Cập nhật hồ sơ đối tác thành công! Hồ sơ đang chờ duyệt.");
     }
 }
 

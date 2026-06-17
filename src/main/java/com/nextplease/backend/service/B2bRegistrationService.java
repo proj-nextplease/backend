@@ -1,6 +1,7 @@
 package com.nextplease.backend.service;
 
 import com.nextplease.backend.dto.request.B2bRegistrationRequest;
+import com.nextplease.backend.dto.request.B2bUpdateRequest;
 import com.nextplease.backend.entity.AppUser;
 import com.nextplease.backend.enums.RoleCode;
 import com.nextplease.backend.exception.AppException;
@@ -289,6 +290,76 @@ public class B2bRegistrationService {
                 """, Map.of(
                 "userId", userId,
                 "documentUrl", documentUrl
+        ));
+    }
+
+    @Transactional
+    public void updateCompanyProfile(UUID userId, B2bUpdateRequest request) {
+        log.info("Updating B2B company profile for user: {}", userId);
+
+        UUID schoolUuid = null;
+        if (request.schoolId() != null && !request.schoolId().isBlank()) {
+            try {
+                schoolUuid = UUID.fromString(request.schoolId());
+            } catch (IllegalArgumentException e) {
+                log.warn("Invalid schoolId UUID format passed: {}", request.schoolId());
+            }
+        }
+
+        int updated = jdbcTemplate.update("""
+                update companies
+                set name = :name,
+                    company_type = :companyType,
+                    description = :description,
+                    website_url = :websiteUrl,
+                    logo_url = :logoUrl,
+                    document_url = :documentUrl,
+                    tax_code = :taxCode,
+                    representative_name = :representativeName,
+                    representative_phone = :representativePhone,
+                    school_id = :schoolId,
+                    fanpage_url = :fanpageUrl,
+                    advisor_contact = :advisorContact::jsonb,
+                    verification_status = 'PENDING',
+                    rejection_reason = null,
+                    updated_at = now()
+                where owner_user_id = :userId
+                """, new MapSqlParameterSource()
+                .addValue("userId", userId)
+                .addValue("name", request.companyName().trim())
+                .addValue("companyType", request.companyType().toUpperCase().trim())
+                .addValue("description", request.description())
+                .addValue("websiteUrl", request.websiteUrl())
+                .addValue("logoUrl", request.logoUrl())
+                .addValue("documentUrl", request.documentUrl())
+                .addValue("taxCode", request.taxCode() != null ? request.taxCode().trim() : null)
+                .addValue("representativeName", request.representativeName().trim())
+                .addValue("representativePhone", request.representativePhone().trim())
+                .addValue("schoolId", schoolUuid)
+                .addValue("fanpageUrl", request.fanpageUrl())
+                .addValue("advisorContact", request.advisorContact() != null ? request.advisorContact() : "{}")
+        );
+
+        if (updated == 0) {
+            throw new com.nextplease.backend.exception.ResourceNotFoundException("Không tìm thấy thông tin đối tác để cập nhật.");
+        }
+
+        jdbcTemplate.update("""
+                insert into audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
+                values (
+                    :userId,
+                    'b2b.profile_updated',
+                    'company',
+                    :userId,
+                    jsonb_build_object(
+                        'company_name', :companyName,
+                        'company_type', :companyType
+                    )
+                )
+                """, Map.of(
+                "userId", userId,
+                "companyName", request.companyName().trim(),
+                "companyType", request.companyType()
         ));
     }
 }

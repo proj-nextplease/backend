@@ -1,0 +1,391 @@
+package com.nextplease.backend.service;
+
+import com.nextplease.backend.dto.request.JobCreateRequest;
+import com.nextplease.backend.exception.AppException;
+import com.nextplease.backend.exception.ResourceNotFoundException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+@Service
+public class JobService {
+
+    private static final Logger log = LoggerFactory.getLogger(JobService.class);
+
+    private final NamedParameterJdbcTemplate jdbcTemplate;
+
+    public JobService(NamedParameterJdbcTemplate jdbcTemplate) {
+        this.jdbcTemplate = jdbcTemplate;
+    }
+
+    /**
+     * Verifies that the user owns an approved company/club.
+     * Returns a map containing the company's info.
+     */
+    private Map<String, Object> verifyAndGetApprovedCompany(UUID userId) {
+        try {
+            Map<String, Object> company = jdbcTemplate.queryForMap("""
+                    select id, verification_status, company_type
+                    from companies
+                    where owner_user_id = :userId
+                    """, Map.of("userId", userId));
+
+            String status = (String) company.get("verification_status");
+            if (!"APPROVED".equals(status)) {
+                throw new AppException(HttpStatus.FORBIDDEN,
+                        "Hồ sơ đối tác chưa được phê duyệt hoặc đang bị khóa. Bạn không thể thực hiện thao tác này.");
+            }
+            return company;
+        } catch (org.springframework.dao.EmptyResultDataAccessException e) {
+            throw new AppException(HttpStatus.FORBIDDEN, "Tài khoản của bạn chưa đăng ký thông tin đối tác.");
+        }
+    }
+
+    @Transactional
+    public UUID createJob(UUID userId, JobCreateRequest request) {
+        log.info("Creating new job posting for user: {}", userId);
+
+        // 1. Enforce B2B approval
+        Map<String, Object> company = verifyAndGetApprovedCompany(userId);
+        UUID companyId = (UUID) company.get("id");
+        String companyType = (String) company.get("company_type");
+
+        // 2. Enforce monthly quota check for free employers
+        // Clubs or Premium accounts can bypass this check. For free corporate accounts:
+        if (!"CLUB".equals(companyType)) {
+            // Check if user has free role
+            List<String> roles = jdbcTemplate.queryForList("""
+                    select role_code from user_roles where user_id = :userId
+                    """, Map.of("userId", userId), String.class);
+
+            if (roles.contains("employer_free") && !roles.contains("employer_premium") && !roles.contains("admin")) {
+                Integer currentMonthPostings = jdbcTemplate.queryForObject("""
+                        select count(*)
+                        from jobs
+                        where company_id = :companyId
+                          and created_at >= date_trunc('month', now())
+                        """, Map.of("companyId", companyId), Integer.class);
+
+                if (currentMonthPostings != null && currentMonthPostings >= 3) {
+                    throw new AppException(HttpStatus.BAD_REQUEST,
+                            "Tài khoản miễn phí tối đa đăng 3 tin tuyển dụng trong tháng. Vui lòng nâng cấp Premium để không bị giới hạn.");
+                }
+            }
+        }
+
+        // 3. Insert into jobs table
+        UUID jobId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                insert into jobs (
+                    id, company_id, title, description, job_type, category, specialty,
+                    compensation, min_req_rs, location, is_remote, capacity,
+                    deadline_at, status, created_by, created_at, updated_at
+                )
+                values (
+                    :id, :companyId, :title, :description, :jobType, :category, :specialty,
+                    :compensation, :minReqRs, :location, :isRemote, :capacity,
+                    :deadlineAt, 'PENDING', :userId, now(), now()
+                )
+
+                """, new MapSqlParameterSource()
+                .addValue("id", jobId)
+                .addValue("companyId", companyId)
+                .addValue("title", request.title().trim())
+                .addValue("description", request.description().trim())
+                .addValue("jobType", request.jobType().toUpperCase().trim())
+                .addValue("category", request.category().toUpperCase().trim())
+                .addValue("specialty", request.specialty().toUpperCase().trim())
+                .addValue("compensation", request.compensation())
+                .addValue("minReqRs", request.minReqRs())
+                .addValue("location", request.location())
+                .addValue("isRemote", request.isRemote() != null ? request.isRemote() : false)
+                .addValue("capacity", request.capacity())
+                .addValue("deadlineAt", request.deadlineAt())
+                .addValue("userId", userId)
+        );
+
+        // 4. Map and insert job skills
+        if (request.skills() != null && !request.skills().isEmpty()) {
+            for (JobCreateRequest.SkillRequirement skillReq : request.skills()) {
+                jdbcTemplate.update("""
+                        insert into job_skills (job_id, skill_id, required_level, created_at)
+                        values (:jobId, :skillId, :requiredLevel, now())
+                        """, Map.of(
+                        "jobId", jobId,
+                        "skillId", skillReq.skillId(),
+                        "requiredLevel", skillReq.requiredLevel() != null ? skillReq.requiredLevel().toUpperCase().trim() : "BEGINNER"
+                ));
+            }
+        }
+
+        // 5. Audit Log
+        jdbcTemplate.update("""
+                insert into audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
+                values (:userId, 'job.created', 'job', :jobId, jsonb_build_object('title', :title))
+                """, Map.of("userId", userId, "jobId", jobId, "title", request.title()));
+
+        log.info("Job successfully created with ID: {}", jobId);
+        return jobId;
+    }
+
+    @Transactional
+    public void updateJob(UUID jobId, UUID userId, JobCreateRequest request) {
+        log.info("Updating job profile: {} by user: {}", jobId, userId);
+
+        // Verify ownership or admin privileges
+        Map<String, Object> job = getJobDetailsRaw(jobId);
+        UUID creatorId = (UUID) job.get("created_by");
+
+        List<String> roles = jdbcTemplate.queryForList("""
+                select role_code from user_roles where user_id = :userId
+                """, Map.of("userId", userId), String.class);
+
+        if (!creatorId.equals(userId) && !roles.contains("admin")) {
+            throw new AppException(HttpStatus.FORBIDDEN, "Bạn không có quyền chỉnh sửa tin tuyển dụng này.");
+        }
+
+        // Update jobs table
+        jdbcTemplate.update("""
+                update jobs
+                set title = :title,
+                    description = :description,
+                    job_type = :jobType,
+                    category = :category,
+                    specialty = :specialty,
+                    compensation = :compensation,
+                    min_req_rs = :minReqRs,
+                    location = :location,
+                    is_remote = :isRemote,
+                    capacity = :capacity,
+                    deadline_at = :deadlineAt,
+                    updated_at = now()
+                where id = :jobId
+                """, new MapSqlParameterSource()
+                .addValue("jobId", jobId)
+                .addValue("title", request.title().trim())
+                .addValue("description", request.description().trim())
+                .addValue("jobType", request.jobType().toUpperCase().trim())
+                .addValue("category", request.category().toUpperCase().trim())
+                .addValue("specialty", request.specialty().toUpperCase().trim())
+                .addValue("compensation", request.compensation())
+                .addValue("minReqRs", request.minReqRs())
+                .addValue("location", request.location())
+                .addValue("isRemote", request.isRemote() != null ? request.isRemote() : false)
+                .addValue("capacity", request.capacity())
+                .addValue("deadlineAt", request.deadlineAt())
+        );
+
+        // Refresh job skills
+        jdbcTemplate.update("delete from job_skills where job_id = :jobId", Map.of("jobId", jobId));
+        if (request.skills() != null && !request.skills().isEmpty()) {
+            for (JobCreateRequest.SkillRequirement skillReq : request.skills()) {
+                jdbcTemplate.update("""
+                        insert into job_skills (job_id, skill_id, required_level, created_at)
+                        values (:jobId, :skillId, :requiredLevel, now())
+                        """, Map.of(
+                        "jobId", jobId,
+                        "skillId", skillReq.skillId(),
+                        "requiredLevel", skillReq.requiredLevel() != null ? skillReq.requiredLevel().toUpperCase().trim() : "BEGINNER"
+                ));
+            }
+        }
+
+        // Audit Log
+        jdbcTemplate.update("""
+                insert into audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
+                values (:userId, 'job.updated', 'job', :jobId, jsonb_build_object('title', :title))
+                """, Map.of("userId", userId, "jobId", jobId, "title", request.title()));
+    }
+
+    public List<Map<String, Object>> searchJobs(
+            String query,
+            String category,
+            String specialty,
+            Integer minRs,
+            Boolean isRemote,
+            String jobType,
+            int limit,
+            int offset
+    ) {
+        StringBuilder sql = new StringBuilder("""
+                select j.id,
+                       j.company_id as "companyId",
+                       j.title,
+                       j.description,
+                       j.job_type as "jobType",
+                       j.category,
+                       j.specialty,
+                       j.compensation,
+                       j.min_req_rs as "minReqRs",
+                       j.location,
+                       j.is_remote as "isRemote",
+                       j.deadline_at as "deadlineAt",
+                       j.status,
+                       c.name as "companyName",
+                       c.logo_url as "companyLogo"
+                from jobs j
+                join companies c on j.company_id = c.id
+                where j.status = 'OPEN'
+                """);
+
+        MapSqlParameterSource params = new MapSqlParameterSource();
+
+        if (query != null && !query.isBlank()) {
+            sql.append(" and (lower(j.title) like :query or lower(j.description) like :query) ");
+            params.addValue("query", "%" + query.trim().toLowerCase() + "%");
+        }
+        if (category != null && !category.isBlank()) {
+            sql.append(" and j.category = :category ");
+            params.addValue("category", category.trim().toUpperCase());
+        }
+        if (specialty != null && !specialty.isBlank()) {
+            sql.append(" and j.specialty = :specialty ");
+            params.addValue("specialty", specialty.trim().toUpperCase());
+        }
+        if (minRs != null) {
+            sql.append(" and j.min_req_rs <= :minRs ");
+            params.addValue("minRs", minRs);
+        }
+        if (isRemote != null) {
+            sql.append(" and j.is_remote = :isRemote ");
+            params.addValue("isRemote", isRemote);
+        }
+        if (jobType != null && !jobType.isBlank()) {
+            sql.append(" and j.job_type = :jobType ");
+            params.addValue("jobType", jobType.trim().toUpperCase());
+        }
+
+        sql.append(" order by j.created_at desc limit :limit offset :offset ");
+        params.addValue("limit", limit);
+        params.addValue("offset", offset);
+
+        List<Map<String, Object>> jobs = jdbcTemplate.queryForList(sql.toString(), params);
+        
+        // Fetch skills for each job to show on candidate side
+        for (Map<String, Object> jobItem : jobs) {
+            UUID id = (UUID) jobItem.get("id");
+            List<Map<String, Object>> skills = getJobSkills(id);
+            jobItem.put("skills", skills);
+        }
+
+        return jobs;
+    }
+
+    public List<Map<String, Object>> getOrganizerJobs(UUID userId) {
+        // Enforce approved company first
+        Map<String, Object> company = verifyAndGetApprovedCompany(userId);
+        UUID companyId = (UUID) company.get("id");
+
+        List<Map<String, Object>> jobs = jdbcTemplate.queryForList("""
+                select id,
+                       title,
+                       job_type as "jobType",
+                       category,
+                       specialty,
+                       compensation,
+                       min_req_rs as "minReqRs",
+                       status,
+                       created_at as "createdAt",
+                       (select count(*) from applications where job_id = jobs.id) as "applicantsCount"
+                from jobs
+                where company_id = :companyId
+                order by created_at desc
+                """, Map.of("companyId", companyId));
+
+        return jobs;
+    }
+
+    public Map<String, Object> getJobDetails(UUID jobId) {
+        Map<String, Object> job = getJobDetailsRaw(jobId);
+        List<Map<String, Object>> skills = getJobSkills(jobId);
+        job.put("skills", skills);
+        return job;
+    }
+
+    private Map<String, Object> getJobDetailsRaw(UUID jobId) {
+        try {
+            return jdbcTemplate.queryForMap("""
+                    select j.id,
+                           j.company_id as "companyId",
+                           j.title,
+                           j.description,
+                           j.job_type as "jobType",
+                           j.category,
+                           j.specialty,
+                           j.compensation,
+                           j.min_req_rs as "minReqRs",
+                           j.location,
+                           j.is_remote as "isRemote",
+                           j.capacity,
+                           j.deadline_at as "deadlineAt",
+                           j.status,
+                           j.rejection_reason as "rejectionReason",
+                           j.created_by,
+                           c.name as "companyName",
+                           c.logo_url as "companyLogo"
+                    from jobs j
+                    join companies c on j.company_id = c.id
+                    where j.id = :jobId
+                    """, Map.of("jobId", jobId));
+        } catch (org.springframework.dao.EmptyResultDataAccessException e) {
+            try {
+                Map<String, Object> questRaw = jdbcTemplate.queryForMap("""
+                        select q.id,
+                               q.company_id as "companyId",
+                               q.title,
+                               q.description,
+                               q.category as "jobType",
+                               q.category,
+                               'OTHER' as "specialty",
+                               (q.exp_reward + q.np_reward) as "compensation",
+                               q.min_req_rs as "minReqRs",
+                               'Địa điểm tổ chức' as "location",
+                               false as "isRemote",
+                               q.capacity,
+                               q.ends_at as "deadlineAt",
+                               q.status,
+                               q.rejection_reason as "rejectionReason",
+                               q.created_by,
+                               c.name as "companyName",
+                               c.logo_url as "companyLogo"
+                        from quests q
+                        join companies c on q.company_id = c.id
+                        where q.id = :jobId
+                        """, Map.of("jobId", jobId));
+                Map<String, Object> quest = new java.util.HashMap<>(questRaw);
+                quest.put("isQuest", true);
+                return quest;
+            } catch (org.springframework.dao.EmptyResultDataAccessException ex) {
+                throw new ResourceNotFoundException("Không tìm thấy tin tuyển dụng hoặc quest này.");
+            }
+        }
+    }
+
+    private List<Map<String, Object>> getJobSkills(UUID jobId) {
+        return jdbcTemplate.queryForList("""
+                select s.id as "skillId",
+                       s.name as "skillName",
+                       js.required_level as "requiredLevel"
+                from job_skills js
+                join skills s on js.skill_id = s.id
+                where js.job_id = :jobId
+                """, Map.of("jobId", jobId));
+    }
+
+    public List<Map<String, Object>> getAllSkills() {
+        return jdbcTemplate.queryForList("""
+                select id, name, category
+                from skills
+                order by name
+                """, Map.of());
+    }
+}
