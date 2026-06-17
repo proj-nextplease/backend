@@ -1,0 +1,4 @@
+ALTER TABLE jobs DROP CONSTRAINT IF EXISTS ck_jobs_status;
+ALTER TABLE jobs
+    ADD CONSTRAINT ck_jobs_status
+        CHECK (status IN ('DRAFT', 'PENDING', 'OPEN', 'REJECTED', 'CLOSED', 'COMPLETED', 'CANCELLED'));

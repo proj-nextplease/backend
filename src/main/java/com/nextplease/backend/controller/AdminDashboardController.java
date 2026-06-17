@@ -12,8 +12,13 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import java.util.UUID;
+
 
 /**
  * Controller providing comprehensive system stats, user listings, postings,
@@ -128,15 +133,22 @@ public class AdminDashboardController {
                 select u.id,
                        u.email,
                        u.display_name as "displayName",
-                       u.status,
+                       u.status as "userStatus",
+                       c.verification_status as "companyStatus",
+                       c.company_type as "companyType",
                        u.created_at as "createdAt",
+                       u.auth_provider as "authProvider",
+                       u.student_email_verified as "studentEmailVerified",
+                       u.premium_until as "premiumUntil",
+                       u.last_login_at as "lastLoginAt",
                        coalesce(
                            string_agg(ur.role_code, ', '),
                            'none'
                        ) as "roles"
                 from app_users u
                 left join user_roles ur on u.id = ur.user_id
-                group by u.id, u.email, u.display_name, u.status, u.created_at
+                left join companies c on u.id = c.owner_user_id
+                group by u.id, u.email, u.display_name, u.status, c.verification_status, c.company_type, u.created_at, u.auth_provider, u.student_email_verified, u.premium_until, u.last_login_at
                 order by u.created_at desc
                 """, Map.of());
 
@@ -175,6 +187,7 @@ public class AdminDashboardController {
                        j.status,
                        j.created_at as "createdAt",
                        c.name as "companyName",
+                       c.company_type as "companyType",
                        'JOB' as "postType"
                 from jobs j
                 join companies c on j.company_id = c.id
@@ -188,6 +201,7 @@ public class AdminDashboardController {
                        q.status,
                        q.created_at as "createdAt",
                        c.name as "companyName",
+                       c.company_type as "companyType",
                        'QUEST' as "postType"
                 from quests q
                 join companies c on q.company_id = c.id
@@ -214,13 +228,132 @@ public class AdminDashboardController {
                        al.entity_id as "entityId",
                        al.metadata,
                        al.created_at as "createdAt",
-                       u.email as "actorEmail"
+                       u.email as "actorEmail",
+                       u.display_name as "actorName",
+                       coalesce(
+                           (select string_agg(ur.role_code, ', ') from user_roles ur where ur.user_id = al.actor_user_id),
+                           'none'
+                       ) as "actorRoles"
                 from audit_logs al
                 left join app_users u on al.actor_user_id = u.id
                 order by al.created_at desc
-                limit 200
+                limit 400
                 """, Map.of());
 
         return ApiResponse.success(logs);
     }
+
+    @PostMapping("/jobs/{id}/approve")
+    public ApiResponse<String> approveJob(@PathVariable UUID id) {
+        MeResponse currentAdmin = requireAdmin();
+
+        int rows = jdbcTemplate.update("""
+                update jobs
+                set status = 'OPEN',
+                    updated_at = now()
+                where id = :jobId
+                """, Map.of("jobId", id));
+
+        if (rows == 0) {
+            rows = jdbcTemplate.update("""
+                    update quests
+                    set status = 'OPEN',
+                        updated_at = now()
+                    where id = :jobId
+                    """, Map.of("jobId", id));
+
+            if (rows == 0) {
+                throw new AppException(HttpStatus.NOT_FOUND, "Không tìm thấy tin tuyển dụng hoặc quest này.");
+            }
+
+            try {
+                jdbcTemplate.update("""
+                        insert into audit_logs (actor_user_id, action, entity_type, entity_id)
+                        values (:adminUserId, 'quest.approved', 'quest', :jobId)
+                        """, Map.of(
+                        "adminUserId", currentAdmin.appUserId(),
+                        "jobId", id
+                ));
+            } catch (Exception e) {
+                log.warn("Failed to write quest approval audit log: {}", e.getMessage());
+            }
+
+            return ApiResponse.success("Đã duyệt quest thành công!");
+        }
+
+        try {
+            jdbcTemplate.update("""
+                    insert into audit_logs (actor_user_id, action, entity_type, entity_id)
+                    values (:adminUserId, 'job.approved', 'job', :jobId)
+                    """, Map.of(
+                    "adminUserId", currentAdmin.appUserId(),
+                    "jobId", id
+            ));
+        } catch (Exception e) {
+            log.warn("Failed to write job approval audit log: {}", e.getMessage());
+        }
+
+        return ApiResponse.success("Đã duyệt tin tuyển dụng thành công!");
+    }
+
+    @PostMapping("/jobs/{id}/reject")
+    public ApiResponse<String> rejectJob(
+            @PathVariable UUID id,
+            @RequestParam(required = false) String reason
+    ) {
+        MeResponse currentAdmin = requireAdmin();
+
+        int rows = jdbcTemplate.update("""
+                update jobs
+                set status = 'REJECTED',
+                    rejection_reason = :reason,
+                    updated_at = now()
+                where id = :jobId
+                """, Map.of("jobId", id, "reason", reason != null ? reason : ""));
+
+        if (rows == 0) {
+            rows = jdbcTemplate.update("""
+                    update quests
+                    set status = 'CLOSED',
+                        rejection_reason = :reason,
+                        updated_at = now()
+                    where id = :jobId
+                    """, Map.of("jobId", id, "reason", reason != null ? reason : ""));
+
+            if (rows == 0) {
+                throw new AppException(HttpStatus.NOT_FOUND, "Không tìm thấy tin tuyển dụng hoặc quest này.");
+            }
+
+            try {
+                jdbcTemplate.update("""
+                        insert into audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
+                        values (:adminUserId, 'quest.rejected', 'quest', :jobId, jsonb_build_object('reason', :reason))
+                        """, Map.of(
+                        "adminUserId", currentAdmin.appUserId(),
+                        "jobId", id,
+                        "reason", reason != null ? reason : ""
+                ));
+            } catch (Exception e) {
+                log.warn("Failed to write quest rejection audit log: {}", e.getMessage());
+            }
+
+            return ApiResponse.success("Đã từ chối quest!");
+        }
+
+        try {
+            jdbcTemplate.update("""
+                    insert into audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
+                    values (:adminUserId, 'job.rejected', 'job', :jobId, jsonb_build_object('reason', :reason))
+                    """, Map.of(
+                    "adminUserId", currentAdmin.appUserId(),
+                    "jobId", id,
+                    "reason", reason != null ? reason : ""
+            ));
+        } catch (Exception e) {
+            log.warn("Failed to write job rejection audit log: {}", e.getMessage());
+        }
+
+        return ApiResponse.success("Đã từ chối tin tuyển dụng!");
+    }
 }
+
