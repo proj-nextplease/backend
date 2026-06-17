@@ -213,6 +213,7 @@ public class JobService {
             Integer minRs,
             Boolean isRemote,
             String jobType,
+            UUID companyId,
             int limit,
             int offset
     ) {
@@ -238,6 +239,11 @@ public class JobService {
                 """);
 
         MapSqlParameterSource params = new MapSqlParameterSource();
+
+        if (companyId != null) {
+            sql.append(" and j.company_id = :companyId ");
+            params.addValue("companyId", companyId);
+        }
 
         if (query != null && !query.isBlank()) {
             sql.append(" and (lower(j.title) like :query or lower(j.description) like :query) ");
@@ -387,5 +393,34 @@ public class JobService {
                 from skills
                 order by name
                 """, Map.of());
+    }
+
+    public List<Map<String, Object>> getApprovedCompanies() {
+        return jdbcTemplate.queryForList("""
+                select c.id, c.name, c.company_type as "companyType", c.description, c.logo_url as "logoUrl",
+                       c.website_url as "websiteUrl", c.tax_code as "taxCode", c.fanpage_url as "fanpageUrl",
+                       c.representative_name as "representativeName", c.representative_phone as "representativePhone",
+                       c.school_id as "schoolId", s.name as "schoolName", c.advisor_contact as "advisorContact"
+                from companies c
+                left join schools s on c.school_id = s.id
+                where c.verification_status = 'APPROVED'
+                order by c.name asc
+                """, Map.of());
+    }
+
+    public Map<String, Object> getCompanyDetails(UUID id) {
+        try {
+            return jdbcTemplate.queryForMap("""
+                    select c.id, c.name, c.company_type as "companyType", c.description, c.logo_url as "logoUrl",
+                           c.website_url as "websiteUrl", c.tax_code as "taxCode", c.fanpage_url as "fanpageUrl",
+                           c.representative_name as "representativeName", c.representative_phone as "representativePhone",
+                           c.school_id as "schoolId", s.name as "schoolName", c.advisor_contact as "advisorContact"
+                    from companies c
+                    left join schools s on c.school_id = s.id
+                    where c.id = :id and c.verification_status = 'APPROVED'
+                    """, Map.of("id", id));
+        } catch (org.springframework.dao.EmptyResultDataAccessException e) {
+            throw new com.nextplease.backend.exception.ResourceNotFoundException("Không tìm thấy thông tin đối tác.");
+        }
     }
 }
