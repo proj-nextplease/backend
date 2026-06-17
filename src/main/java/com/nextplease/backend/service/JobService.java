@@ -73,6 +73,7 @@ public class JobService {
                         from jobs
                         where company_id = :companyId
                           and created_at >= date_trunc('month', now())
+                          and status != 'REJECTED'
                         """, Map.of("companyId", companyId), Integer.class);
 
                 if (currentMonthPostings != null && currentMonthPostings >= 3) {
@@ -227,6 +228,7 @@ public class JobService {
                        j.specialty,
                        j.compensation,
                        j.min_req_rs as "minReqRs",
+                       j.requires_premium as "requiresPremium",
                        j.location,
                        j.is_remote as "isRemote",
                        j.deadline_at as "deadlineAt",
@@ -236,7 +238,8 @@ public class JobService {
                 from jobs j
                 join companies c on j.company_id = c.id
                 where j.status = 'OPEN'
-                """);
+                  and (j.deadline_at is null or j.deadline_at > now())
+""");
 
         MapSqlParameterSource params = new MapSqlParameterSource();
 
@@ -300,6 +303,7 @@ public class JobService {
                        compensation,
                        min_req_rs as "minReqRs",
                        status,
+                       deadline_at as "deadlineAt",
                        created_at as "createdAt",
                        (select count(*) from applications where job_id = jobs.id) as "applicantsCount"
                 from jobs
@@ -337,7 +341,9 @@ public class JobService {
                            j.rejection_reason as "rejectionReason",
                            j.created_by,
                            c.name as "companyName",
-                           c.logo_url as "companyLogo"
+                           c.logo_url as "companyLogo",
+                           c.company_type as "companyType",
+                           'JOB' as "postType"
                     from jobs j
                     join companies c on j.company_id = c.id
                     where j.id = :jobId
@@ -352,9 +358,10 @@ public class JobService {
                                q.category as "jobType",
                                q.category,
                                'OTHER' as "specialty",
-                               (q.exp_reward + q.np_reward) as "compensation",
+                               null as "compensation",
+                               q.exp_reward as "expReward",
                                q.min_req_rs as "minReqRs",
-                               'Địa điểm tổ chức' as "location",
+                               'FPTU HCM' as "location",
                                false as "isRemote",
                                q.capacity,
                                q.ends_at as "deadlineAt",
@@ -362,7 +369,9 @@ public class JobService {
                                q.rejection_reason as "rejectionReason",
                                q.created_by,
                                c.name as "companyName",
-                               c.logo_url as "companyLogo"
+                               c.logo_url as "companyLogo",
+                               c.company_type as "companyType",
+                               'QUEST' as "postType"
                         from quests q
                         join companies c on q.company_id = c.id
                         where q.id = :jobId

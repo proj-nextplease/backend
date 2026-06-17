@@ -10,10 +10,13 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -32,13 +35,16 @@ public class AdminDashboardController {
 
     private final CurrentUserService currentUserService;
     private final NamedParameterJdbcTemplate jdbcTemplate;
+    private final com.nextplease.backend.service.CredentialService credentialService;
 
     public AdminDashboardController(
             CurrentUserService currentUserService,
-            NamedParameterJdbcTemplate jdbcTemplate
+            NamedParameterJdbcTemplate jdbcTemplate,
+            com.nextplease.backend.service.CredentialService credentialService
     ) {
         this.currentUserService = currentUserService;
         this.jdbcTemplate = jdbcTemplate;
+        this.credentialService = credentialService;
     }
 
     /**
@@ -314,7 +320,7 @@ public class AdminDashboardController {
         if (rows == 0) {
             rows = jdbcTemplate.update("""
                     update quests
-                    set status = 'CLOSED',
+                    set status = 'REJECTED',
                         rejection_reason = :reason,
                         updated_at = now()
                     where id = :jobId
@@ -355,5 +361,171 @@ public class AdminDashboardController {
 
         return ApiResponse.success("Đã từ chối tin tuyển dụng!");
     }
+
+    // ── Verification Queue ───────────────────────────────────────────────────
+
+    /** GET /api/v1/admin/dashboard/verification-queue — all PENDING proof submissions */
+    @GetMapping("/verification-queue")
+    public ApiResponse<List<Map<String, Object>>> getVerificationQueue() {
+        requireAdmin();
+        return ApiResponse.success(credentialService.getPendingQueue());
+    }
+
+    /** POST /api/v1/admin/dashboard/verification-queue/{id}/approve */
+    @PostMapping("/verification-queue/{id}/approve")
+    public ApiResponse<String> approveCredential(
+            @PathVariable UUID id,
+            @RequestParam(required = false) String note
+    ) {
+        MeResponse admin = requireAdmin();
+        credentialService.approve(id, admin.appUserId(), note);
+        return ApiResponse.success("Đã phê duyệt minh chứng và cộng EXP/RS cho ứng viên.");
+    }
+
+    /** POST /api/v1/admin/dashboard/verification-queue/{id}/reject */
+    @PostMapping("/verification-queue/{id}/reject")
+    public ApiResponse<String> rejectCredential(
+            @PathVariable UUID id,
+            @RequestParam String reason
+    ) {
+        MeResponse admin = requireAdmin();
+        credentialService.reject(id, admin.appUserId(), reason);
+        return ApiResponse.success("Đã từ chối minh chứng.");
+    }
+
+    // ── User Moderation ──────────────────────────────────────────────────────
+
+    /** PATCH /api/v1/admin/dashboard/users/{id}/status — freeze, ban, or unfreeze a user */
+    @PatchMapping("/users/{id}/status")
+    public ApiResponse<String> updateUserStatus(
+            @PathVariable UUID id,
+            @RequestBody UserStatusRequest body
+    ) {
+        MeResponse admin = requireAdmin();
+        List<String> allowed = List.of("FROZEN", "BANNED", "ACTIVE");
+        if (!allowed.contains(body.status())) {
+            throw new AppException(HttpStatus.BAD_REQUEST, "Trạng thái không hợp lệ: " + body.status());
+        }
+
+        // Prevent admin from modifying themselves
+        if (id.equals(admin.appUserId())) {
+            throw new AppException(HttpStatus.FORBIDDEN, "Không thể thay đổi trạng thái tài khoản của chính mình.");
+        }
+
+        int rows = jdbcTemplate.update("""
+                update app_users
+                set status = :status, updated_at = now()
+                where id = :userId
+                """, Map.of("status", body.status(), "userId", id));
+
+        if (rows == 0) {
+            throw new AppException(HttpStatus.NOT_FOUND, "Không tìm thấy người dùng.");
+        }
+
+        String actionVerb = switch (body.status()) {
+            case "FROZEN" -> "đóng băng";
+            case "BANNED"  -> "cấm";
+            case "ACTIVE"  -> "kích hoạt lại";
+            default -> "cập nhật";
+        };
+
+        try {
+            jdbcTemplate.update("""
+                    insert into audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
+                    values (:adminId, :action, 'app_user', :targetId,
+                            jsonb_build_object('new_status', :status, 'reason', :reason))
+                    """, new MapSqlParameterSource()
+                    .addValue("adminId", admin.appUserId())
+                    .addValue("action", "admin.user." + body.status().toLowerCase())
+                    .addValue("targetId", id)
+                    .addValue("status", body.status())
+                    .addValue("reason", body.reason() != null ? body.reason() : ""));
+        } catch (Exception e) {
+            log.warn("Failed to write user status audit log: {}", e.getMessage());
+        }
+
+        return ApiResponse.success("Đã " + actionVerb + " tài khoản người dùng.");
+    }
+
+    /** POST /api/v1/admin/dashboard/users/{id}/fraud-flag — flag a user for fraud */
+    @PostMapping("/users/{id}/fraud-flag")
+    public ApiResponse<String> createFraudFlag(
+            @PathVariable UUID id,
+            @RequestBody FraudFlagRequest body
+    ) {
+        MeResponse admin = requireAdmin();
+
+        jdbcTemplate.update("""
+                insert into fraud_flags
+                    (user_id, created_by, reason_code, severity, evidence, status)
+                values
+                    (:userId, :createdBy, :reasonCode, :severity, :evidence::jsonb, 'ACTIVE')
+                """, new MapSqlParameterSource()
+                .addValue("userId", id)
+                .addValue("createdBy", admin.appUserId())
+                .addValue("reasonCode", body.reasonCode())
+                .addValue("severity", body.severity() != null ? body.severity() : "LOW")
+                .addValue("evidence", body.evidence() != null ? body.evidence() : "{}"));
+
+        return ApiResponse.success("Đã gắn cờ gian lận cho người dùng.");
+    }
+
+    /** GET /api/v1/admin/dashboard/fraud-flags — list active fraud flags */
+    @GetMapping("/fraud-flags")
+    public ApiResponse<List<Map<String, Object>>> getActiveFraudFlags() {
+        requireAdmin();
+
+        List<Map<String, Object>> flags = jdbcTemplate.queryForList("""
+                select
+                    ff.id,
+                    ff.reason_code   as "reasonCode",
+                    ff.severity,
+                    ff.status,
+                    ff.evidence,
+                    ff.created_at    as "createdAt",
+                    u.id             as "userId",
+                    u.email          as "userEmail",
+                    u.display_name   as "userName",
+                    u.status         as "userStatus",
+                    r.email          as "reportedByEmail"
+                from fraud_flags ff
+                join app_users u on u.id = ff.user_id
+                left join app_users r on r.id = ff.created_by
+                where ff.status = 'ACTIVE'
+                order by ff.created_at desc
+                limit 100
+                """, Map.of());
+
+        return ApiResponse.success(flags);
+    }
+
+    /** PATCH /api/v1/admin/dashboard/fraud-flags/{id}/resolve */
+    @PatchMapping("/fraud-flags/{id}/resolve")
+    public ApiResponse<String> resolveFraudFlag(
+            @PathVariable UUID id,
+            @RequestParam(defaultValue = "RESOLVED") String resolution
+    ) {
+        requireAdmin();
+        List<String> allowed = List.of("RESOLVED", "FALSE_POSITIVE");
+        if (!allowed.contains(resolution)) {
+            throw new AppException(HttpStatus.BAD_REQUEST, "Kết quả không hợp lệ: " + resolution);
+        }
+
+        int rows = jdbcTemplate.update("""
+                update fraud_flags set status = :status, updated_at = now()
+                where id = :id
+                """, Map.of("id", id, "status", resolution));
+
+        if (rows == 0) {
+            throw new AppException(HttpStatus.NOT_FOUND, "Không tìm thấy fraud flag.");
+        }
+
+        return ApiResponse.success("Đã cập nhật fraud flag → " + resolution);
+    }
+
+    // ── Request records ───────────────────────────────────────────────────────
+
+    record UserStatusRequest(String status, String reason) {}
+    record FraudFlagRequest(String reasonCode, String severity, String evidence) {}
 }
 

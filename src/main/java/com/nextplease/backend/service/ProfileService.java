@@ -33,13 +33,16 @@ public class ProfileService {
 
     private final NamedParameterJdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
+    private final ReputationService reputationService;
 
     public ProfileService(
             NamedParameterJdbcTemplate jdbcTemplate,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            ReputationService reputationService
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
+        this.reputationService = reputationService;
     }
 
     private HttpServletRequest getCurrentRequest() {
@@ -82,6 +85,25 @@ public class ProfileService {
         throw new ResourceNotFoundException("Yêu cầu phiên đăng nhập Supabase đã xác thực.");
     }
 
+
+    public Map<String, Object> getPublicProfile(UUID userId) {
+        try {
+            Map<String, Object> row = jdbcTemplate.queryForMap("""
+                    select u.display_name as name, u.email,
+                           p.headline, p.major, p.avatar_url,
+                           p.reputation_score, p.current_level, p.total_exp,
+                           p.credentials::text as credentials, p.bio,
+                           s.name as school
+                    from app_users u
+                    join profiles p on p.user_id = u.id
+                    left join schools s on s.id = p.school_id
+                    where u.id = :userId
+                    """, Map.of("userId", userId));
+            return row;
+        } catch (org.springframework.dao.EmptyResultDataAccessException e) {
+            throw new com.nextplease.backend.exception.ResourceNotFoundException("Không tìm thấy hồ sơ ứng viên.");
+        }
+    }
 
     @Transactional
     public PortfolioResponse getPortfolio() {
@@ -235,6 +257,82 @@ public class ProfileService {
         );
     }
 
+    public PortfolioResponse getPortfolioByUserId(UUID userId) {
+        Map<String, Object> userRow;
+        try {
+            userRow = jdbcTemplate.queryForMap("""
+                    select u.display_name, coalesce(w.np_balance, 0) as np_balance
+                    from app_users u
+                    left join wallets w on w.user_id = u.id
+                    where u.id = :userId
+                    """, Map.of("userId", userId));
+        } catch (EmptyResultDataAccessException e) {
+            throw new ResourceNotFoundException("Không tìm thấy người dùng.");
+        }
+
+        String displayName = (String) userRow.get("display_name");
+        long npBalance = userRow.get("np_balance") != null ? ((Number) userRow.get("np_balance")).longValue() : 0L;
+
+        Map<String, Object> profile;
+        try {
+            profile = jdbcTemplate.queryForMap("""
+                    select id, headline, bio, location, school_id, avatar_config, credentials::text as credentials,
+                           onboarding_completed, reputation_score, total_exp, current_level
+                    from profiles where user_id = :userId
+                    """, Map.of("userId", userId));
+        } catch (EmptyResultDataAccessException e) {
+            throw new ResourceNotFoundException("Không tìm thấy hồ sơ ứng viên.");
+        }
+
+        UUID profileId = (UUID) profile.get("id");
+        String headline = (String) profile.get("headline");
+        String bio = (String) profile.get("bio");
+        String location = (String) profile.get("location");
+        UUID schoolId = (UUID) profile.get("school_id");
+
+        String schoolName = "";
+        if (schoolId != null) {
+            try {
+                schoolName = jdbcTemplate.queryForObject("""
+                        select name from schools where id = :schoolId
+                        """, Map.of("schoolId", schoolId), String.class);
+            } catch (EmptyResultDataAccessException ignored) {}
+        }
+
+        Map<String, Object> avatarConfig = parseJsonMap(getJsonString(profile.get("avatar_config")));
+        List<CredentialDto> credentials = parseCredentialsJson(getJsonString(profile.get("credentials")));
+
+        List<String> skills = jdbcTemplate.query("""
+                select s.name from skills s
+                join profile_skills ps on ps.skill_id = s.id
+                where ps.profile_id = :profileId
+                """, Map.of("profileId", profileId), (rs, rowNum) -> rs.getString("name"));
+
+        List<ExperienceDto> experiences = jdbcTemplate.query("""
+                select id, project_name, position, description, started_at, ended_at from experiences
+                where profile_id = :profileId
+                order by created_at asc
+                """, Map.of("profileId", profileId), (rs, rowNum) -> new ExperienceDto(
+                        rs.getString("id"),
+                        rs.getString("position"),
+                        rs.getString("project_name"),
+                        rs.getString("description"),
+                        formatMmYy(rs.getDate("started_at")),
+                        formatMmYy(rs.getDate("ended_at"))
+                ));
+
+        boolean onboardingCompleted = Boolean.TRUE.equals(profile.get("onboarding_completed"));
+        int reputationScore = profile.get("reputation_score") != null ? ((Number) profile.get("reputation_score")).intValue() : 0;
+        long totalExp = profile.get("total_exp") != null ? ((Number) profile.get("total_exp")).longValue() : 0L;
+        int currentLevel = profile.get("current_level") != null ? ((Number) profile.get("current_level")).intValue() : 1;
+
+        return new PortfolioResponse(
+                displayName, headline, schoolName, location, bio,
+                skills, avatarConfig, experiences, credentials,
+                onboardingCompleted, reputationScore, totalExp, currentLevel, npBalance
+        );
+    }
+
     @Transactional
     public void updatePortfolio(PortfolioRequest request, boolean isDraft) {
         UUID supabaseUserId = getCurrentUserSupabaseId();
@@ -296,14 +394,18 @@ public class ProfileService {
             userId = (UUID) newUser.get("id");
         }
 
-        // 2. Find profile ID or create if not exists
+        // 2. Find profile ID or create if not exists; capture current onboarding state
         UUID profileId;
+        boolean wasOnboardingCompleted;
         try {
-            profileId = jdbcTemplate.queryForObject("""
-                    select id from profiles where user_id = :userId
-                    """, Map.of("userId", userId), UUID.class);
+            Map<String, Object> profileRow = jdbcTemplate.queryForMap("""
+                    select id, onboarding_completed from profiles where user_id = :userId
+                    """, Map.of("userId", userId));
+            profileId = (UUID) profileRow.get("id");
+            wasOnboardingCompleted = Boolean.TRUE.equals(profileRow.get("onboarding_completed"));
         } catch (EmptyResultDataAccessException e) {
             profileId = UUID.randomUUID();
+            wasOnboardingCompleted = false;
             jdbcTemplate.update("""
                     insert into profiles (id, user_id, headline, visibility)
                     values (:id, :userId, 'Ứng viên nextplease', '{}'::jsonb)
@@ -364,6 +466,11 @@ public class ProfileService {
 
         // 8. Update experiences
         updateExperiences(profileId, request.experiences());
+
+        // 9. +5 RS once when onboarding flips from false → true
+        if (!isDraft && !wasOnboardingCompleted) {
+            reputationService.addReputation(profileId, 5, "ONBOARDING_COMPLETED", "profile", profileId);
+        }
     }
 
     private void updateProfileSkills(UUID profileId, List<String> skillNames) {

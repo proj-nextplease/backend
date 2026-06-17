@@ -19,7 +19,10 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(AppException.class)
     ResponseEntity<ApiResponse<Void>> handleAppException(AppException exception) {
-        return ResponseEntity.status(exception.getStatus()).body(ApiResponse.error(exception.getMessage()));
+        ApiResponse<Void> body = exception.getErrorCode() != null
+                ? ApiResponse.errorWithCode(exception.getMessage(), exception.getErrorCode())
+                : ApiResponse.error(exception.getMessage());
+        return ResponseEntity.status(exception.getStatus()).body(body);
     }
 
     @ExceptionHandler(ResourceNotFoundException.class)
