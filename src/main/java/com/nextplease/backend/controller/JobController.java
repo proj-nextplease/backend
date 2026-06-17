@@ -40,11 +40,12 @@ public class JobController {
             @RequestParam(required = false) Integer minRs,
             @RequestParam(required = false) Boolean isRemote,
             @RequestParam(required = false) String jobType,
+            @RequestParam(required = false) UUID companyId,
             @RequestParam(defaultValue = "10") int limit,
             @RequestParam(defaultValue = "0") int offset
     ) {
         List<Map<String, Object>> list = jobService.searchJobs(
-                query, category, specialty, minRs, isRemote, jobType, limit, offset
+                query, category, specialty, minRs, isRemote, jobType, companyId, limit, offset
         );
         return ApiResponse.success(list);
     }
@@ -85,5 +86,17 @@ public class JobController {
     public ApiResponse<List<Map<String, Object>>> getSkills() {
         List<Map<String, Object>> list = jobService.getAllSkills();
         return ApiResponse.success(list);
+    }
+
+    @GetMapping("/companies")
+    public ApiResponse<List<Map<String, Object>>> getApprovedCompanies() {
+        List<Map<String, Object>> list = jobService.getApprovedCompanies();
+        return ApiResponse.success(list);
+    }
+
+    @GetMapping("/companies/{id}")
+    public ApiResponse<Map<String, Object>> getCompanyDetails(@PathVariable UUID id) {
+        Map<String, Object> company = jobService.getCompanyDetails(id);
+        return ApiResponse.success(company);
     }
 }
