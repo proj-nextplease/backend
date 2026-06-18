@@ -7,7 +7,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 
@@ -22,7 +22,7 @@ public record JobCreateRequest(
         @Size(max = 200) String location,
         Boolean isRemote,
         @Min(1) Integer capacity,
-        LocalDateTime deadlineAt,
+        OffsetDateTime deadlineAt,
         @Valid List<SkillRequirement> skills
 ) {
     public record SkillRequirement(
