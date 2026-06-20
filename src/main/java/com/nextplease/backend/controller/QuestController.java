@@ -6,10 +6,12 @@ import com.nextplease.backend.service.QuestService;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -56,6 +58,14 @@ public class QuestController {
         return ApiResponse.success(questService.getMyQuestApplications(userId));
     }
 
+    /** PATCH /api/v1/me/quest-applications/{id}/withdraw — candidate withdraws */
+    @PatchMapping("/me/quest-applications/{id}/withdraw")
+    public ApiResponse<String> withdrawQuestApplication(@PathVariable UUID id) {
+        UUID userId = currentUserService.getCurrentUser().appUserId();
+        questService.withdrawQuestApplication(userId, id);
+        return ApiResponse.success("Đã rút đơn Quest.");
+    }
+
     // ── Organizer ─────────────────────────────────────────────────────────────
 
     /** POST /api/v1/organizer/quests — create a new quest */
@@ -70,6 +80,37 @@ public class QuestController {
     public ApiResponse<List<Map<String, Object>>> getOrganizerQuests() {
         UUID userId = currentUserService.getCurrentUser().appUserId();
         return ApiResponse.success(questService.getOrganizerQuests(userId));
+    }
+
+    /** GET /api/v1/organizer/quests/{id} — get single quest for editing */
+    @GetMapping("/organizer/quests/{id}")
+    public ApiResponse<Map<String, Object>> getOrganizerQuestById(@PathVariable UUID id) {
+        UUID userId = currentUserService.getCurrentUser().appUserId();
+        return ApiResponse.success(questService.getOrganizerQuestById(userId, id));
+    }
+
+    /** PUT /api/v1/organizer/quests/{id} — update quest */
+    @PutMapping("/organizer/quests/{id}")
+    public ApiResponse<String> updateQuest(@PathVariable UUID id, @RequestBody Map<String, Object> body) {
+        UUID userId = currentUserService.getCurrentUser().appUserId();
+        questService.updateQuest(userId, id, body);
+        return ApiResponse.success("Cập nhật Quest thành công.");
+    }
+
+    /** PATCH /api/v1/organizer/quests/{id}/close — close an OPEN quest */
+    @PatchMapping("/organizer/quests/{id}/close")
+    public ApiResponse<String> closeQuest(@PathVariable UUID id) {
+        UUID userId = currentUserService.getCurrentUser().appUserId();
+        questService.closeQuest(userId, id);
+        return ApiResponse.success("Đã đóng Quest.");
+    }
+
+    /** DELETE /api/v1/organizer/quests/{id} — delete quest */
+    @DeleteMapping("/organizer/quests/{id}")
+    public ApiResponse<String> deleteQuest(@PathVariable UUID id) {
+        UUID userId = currentUserService.getCurrentUser().appUserId();
+        questService.deleteQuest(userId, id);
+        return ApiResponse.success("Xoá Quest thành công.");
     }
 
     /** GET /api/v1/organizer/quests/{id}/applications */

@@ -22,32 +22,19 @@ public class JobService {
     private static final Logger log = LoggerFactory.getLogger(JobService.class);
 
     private final NamedParameterJdbcTemplate jdbcTemplate;
+    private final CompanyAccessService companyAccessService;
 
-    public JobService(NamedParameterJdbcTemplate jdbcTemplate) {
+    public JobService(NamedParameterJdbcTemplate jdbcTemplate, CompanyAccessService companyAccessService) {
         this.jdbcTemplate = jdbcTemplate;
+        this.companyAccessService = companyAccessService;
     }
 
     /**
-     * Verifies that the user owns an approved company/club.
-     * Returns a map containing the company's info.
+     * Verifies that the user holds an active authority node on an approved company/club.
+     * Returns a map containing the company's info (id, verification_status, company_type).
      */
     private Map<String, Object> verifyAndGetApprovedCompany(UUID userId) {
-        try {
-            Map<String, Object> company = jdbcTemplate.queryForMap("""
-                    select id, verification_status, company_type
-                    from companies
-                    where owner_user_id = :userId
-                    """, Map.of("userId", userId));
-
-            String status = (String) company.get("verification_status");
-            if (!"APPROVED".equals(status)) {
-                throw new AppException(HttpStatus.FORBIDDEN,
-                        "Hồ sơ đối tác chưa được phê duyệt hoặc đang bị khóa. Bạn không thể thực hiện thao tác này.");
-            }
-            return company;
-        } catch (org.springframework.dao.EmptyResultDataAccessException e) {
-            throw new AppException(HttpStatus.FORBIDDEN, "Tài khoản của bạn chưa đăng ký thông tin đối tác.");
-        }
+        return companyAccessService.resolveApprovedCompanyForUser(userId);
     }
 
     @Transactional
@@ -58,6 +45,9 @@ public class JobService {
         Map<String, Object> company = verifyAndGetApprovedCompany(userId);
         UUID companyId = (UUID) company.get("id");
         String companyType = (String) company.get("company_type");
+
+        // 1b. Only OWNER/MANAGER may create postings (MEMBER is view + review only)
+        companyAccessService.assertCanManagePostings(userId, companyId);
 
         // 2. Enforce monthly quota check for free employers
         // Clubs or Premium accounts can bypass this check. For free corporate accounts:
@@ -142,17 +132,21 @@ public class JobService {
     public void updateJob(UUID jobId, UUID userId, JobCreateRequest request) {
         log.info("Updating job profile: {} by user: {}", jobId, userId);
 
-        // Verify ownership or admin privileges
+        // Verify edit rights: platform admin, or OWNER/MANAGER of the job's company (MEMBER cannot edit).
         Map<String, Object> job = getJobDetailsRaw(jobId);
-        UUID creatorId = (UUID) job.get("created_by");
+        UUID companyId = (UUID) job.get("companyId");
 
         List<String> roles = jdbcTemplate.queryForList("""
                 select role_code from user_roles where user_id = :userId
                 """, Map.of("userId", userId), String.class);
 
-        if (!creatorId.equals(userId) && !roles.contains("admin")) {
-            throw new AppException(HttpStatus.FORBIDDEN, "Bạn không có quyền chỉnh sửa tin tuyển dụng này.");
+        if (!roles.contains("admin")) {
+            companyAccessService.assertCanManagePostings(userId, companyId);
         }
+
+        // If OPEN → reset to PENDING so Admin re-reviews the changes
+        String currentStatus = (String) job.get("status");
+        String newStatus = "OPEN".equalsIgnoreCase(currentStatus) ? "PENDING" : currentStatus;
 
         // Update jobs table
         jdbcTemplate.update("""
@@ -168,9 +162,11 @@ public class JobService {
                     is_remote = :isRemote,
                     capacity = :capacity,
                     deadline_at = :deadlineAt,
+                    status = :status,
                     updated_at = now()
                 where id = :jobId
                 """, new MapSqlParameterSource()
+                .addValue("status", newStatus)
                 .addValue("jobId", jobId)
                 .addValue("title", request.title().trim())
                 .addValue("description", request.description().trim())
@@ -257,8 +253,9 @@ public class JobService {
             params.addValue("category", category.trim().toUpperCase());
         }
         if (specialty != null && !specialty.isBlank()) {
-            sql.append(" and j.specialty = :specialty ");
-            params.addValue("specialty", specialty.trim().toUpperCase());
+            // specialty may be stored as comma-separated (multi-select); use LIKE for partial match
+            sql.append(" and j.specialty ilike :specialty ");
+            params.addValue("specialty", "%" + specialty.trim().toUpperCase() + "%");
         }
         if (minRs != null) {
             sql.append(" and j.min_req_rs <= :minRs ");
@@ -396,11 +393,69 @@ public class JobService {
                 """, Map.of("jobId", jobId));
     }
 
+    public Map<String, Object> getOrganizerJobById(UUID userId, UUID jobId) {
+        Map<String, Object> company = verifyAndGetApprovedCompany(userId);
+        UUID companyId = (UUID) company.get("id");
+        try {
+            Map<String, Object> job = jdbcTemplate.queryForMap("""
+                    select id, title, description, job_type as "jobType", category, specialty,
+                           compensation, min_req_rs as "minReqRs", location, is_remote as "isRemote",
+                           capacity, deadline_at as "deadlineAt", status, rejection_reason as "rejectionReason"
+                    from jobs
+                    where id = :jobId and company_id = :companyId
+                    """, Map.of("jobId", jobId, "companyId", companyId));
+            job.put("skills", getJobSkills(jobId));
+            return job;
+        } catch (org.springframework.dao.EmptyResultDataAccessException e) {
+            throw new ResourceNotFoundException("Không tìm thấy tin tuyển dụng này.");
+        }
+    }
+
+    @Transactional
+    public void closeJob(UUID userId, UUID jobId) {
+        Map<String, Object> company = verifyAndGetApprovedCompany(userId);
+        UUID companyId = (UUID) company.get("id");
+        companyAccessService.assertCanManagePostings(userId, companyId);
+
+        int rows = jdbcTemplate.update("""
+                update jobs set status = 'CLOSED', updated_at = now()
+                where id = :jobId and company_id = :companyId and status = 'OPEN'
+                """, Map.of("jobId", jobId, "companyId", companyId));
+        if (rows == 0) {
+            throw new AppException(HttpStatus.CONFLICT,
+                    "Tin tuyển dụng không ở trạng thái OPEN hoặc không tìm thấy.");
+        }
+    }
+
+    @Transactional
+    public void deleteJob(UUID userId, UUID jobId) {
+        Map<String, Object> company = verifyAndGetApprovedCompany(userId);
+        UUID companyId = (UUID) company.get("id");
+        companyAccessService.assertCanManagePostings(userId, companyId);
+
+        // Block deleting OPEN jobs — must close first
+        String status = jdbcTemplate.queryForObject(
+                "select status from jobs where id = :jobId and company_id = :companyId",
+                Map.of("jobId", jobId, "companyId", companyId), String.class);
+        if ("OPEN".equals(status)) {
+            throw new AppException(HttpStatus.CONFLICT,
+                    "Không thể xoá tin đang OPEN. Hãy đóng tin trước.");
+        }
+
+        int rows = jdbcTemplate.update("""
+                delete from jobs where id = :jobId and company_id = :companyId
+                """, Map.of("jobId", jobId, "companyId", companyId));
+        if (rows == 0) {
+            throw new ResourceNotFoundException("Không tìm thấy tin tuyển dụng hoặc bạn không có quyền xoá.");
+        }
+    }
+
     public List<Map<String, Object>> getAllSkills() {
         return jdbcTemplate.queryForList("""
                 select id, name, category
                 from skills
-                order by name
+                where category is not null
+                order by category, name
                 """, Map.of());
     }
 

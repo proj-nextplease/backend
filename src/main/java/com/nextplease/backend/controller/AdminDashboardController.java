@@ -36,15 +36,18 @@ public class AdminDashboardController {
     private final CurrentUserService currentUserService;
     private final NamedParameterJdbcTemplate jdbcTemplate;
     private final com.nextplease.backend.service.CredentialService credentialService;
+    private final com.nextplease.backend.service.SupabaseAdminService supabaseAdminService;
 
     public AdminDashboardController(
             CurrentUserService currentUserService,
             NamedParameterJdbcTemplate jdbcTemplate,
-            com.nextplease.backend.service.CredentialService credentialService
+            com.nextplease.backend.service.CredentialService credentialService,
+            com.nextplease.backend.service.SupabaseAdminService supabaseAdminService
     ) {
         this.currentUserService = currentUserService;
         this.jdbcTemplate = jdbcTemplate;
         this.credentialService = credentialService;
+        this.supabaseAdminService = supabaseAdminService;
     }
 
     /**
@@ -445,6 +448,82 @@ public class AdminDashboardController {
         }
 
         return ApiResponse.success("Đã " + actionVerb + " tài khoản người dùng.");
+    }
+
+    /**
+     * DELETE /api/v1/admin/dashboard/users/{id} — Admin xóa tài khoản người dùng.
+     * Cách an toàn: thu hồi mọi quyền tổ chức + đánh dấu status=DELETED + xóa tài khoản Supabase Auth
+     * (không đăng nhập được nữa). KHÔNG purge vật lý toàn bộ dữ liệu để tránh phá vỡ ràng buộc/lịch sử.
+     * Chặn: tự xóa mình, xóa admin khác, xóa người đang là OWNER của một tổ chức (phải chuyển quyền trước).
+     */
+    @org.springframework.web.bind.annotation.DeleteMapping("/users/{id}")
+    @org.springframework.transaction.annotation.Transactional
+    public ApiResponse<String> deleteUser(@PathVariable UUID id) {
+        MeResponse admin = requireAdmin();
+        if (id.equals(admin.appUserId())) {
+            throw new AppException(HttpStatus.FORBIDDEN, "Không thể xóa tài khoản của chính mình.");
+        }
+
+        try {
+            java.util.UUID supabaseUserId;
+            try {
+                supabaseUserId = jdbcTemplate.queryForObject(
+                        "select supabase_user_id from app_users where id = :id", Map.of("id", id), java.util.UUID.class);
+            } catch (org.springframework.dao.EmptyResultDataAccessException e) {
+                throw new AppException(HttpStatus.NOT_FOUND, "Không tìm thấy người dùng.");
+            }
+
+            List<String> targetRoles = jdbcTemplate.queryForList(
+                    "select role_code from user_roles where user_id = :id", Map.of("id", id), String.class);
+            if (targetRoles.contains("admin")) {
+                throw new AppException(HttpStatus.FORBIDDEN, "Không thể xóa tài khoản Quản trị viên khác.");
+            }
+
+            Integer ownsCompanies = jdbcTemplate.queryForObject(
+                    "select count(*) from companies where owner_user_id = :id", Map.of("id", id), Integer.class);
+            if (ownsCompanies != null && ownsCompanies > 0) {
+                throw new AppException(HttpStatus.CONFLICT,
+                        "Người dùng đang là Chủ sở hữu của một tổ chức. Hãy chuyển quyền sở hữu (hoặc xử lý tổ chức đó) trước khi xóa.");
+            }
+
+            // Thu hồi mọi quyền truy cập tổ chức (đã cấp / đang chờ)
+            jdbcTemplate.update("""
+                    update authority_nodes set status = 'REJECTED', deleted_at = now(), updated_at = now()
+                    where user_id = :id and status <> 'REJECTED' and deleted_at is null
+                    """, Map.of("id", id));
+
+            // Đánh dấu tài khoản đã xóa (login bị chặn ở BE vì status != ACTIVE)
+            jdbcTemplate.update("""
+                    update app_users set status = 'DELETED', deleted_at = now(), updated_at = now()
+                    where id = :id
+                    """, Map.of("id", id));
+
+            // Xóa tài khoản trên Supabase Auth để không thể đăng nhập lại
+            try {
+                if (supabaseUserId != null) {
+                    supabaseAdminService.deleteUser(supabaseUserId);
+                }
+            } catch (Exception e) {
+                log.warn("Failed to delete Supabase Auth user {}: {}", supabaseUserId, e.getMessage());
+            }
+
+            try {
+                jdbcTemplate.update("""
+                        insert into audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
+                        values (:adminId, 'admin.user.deleted', 'app_user', :targetId, '{}'::jsonb)
+                        """, Map.of("adminId", admin.appUserId(), "targetId", id));
+            } catch (Exception e) {
+                log.warn("Failed to write user delete audit log: {}", e.getMessage());
+            }
+
+            return ApiResponse.success("Đã xóa tài khoản người dùng và thu hồi mọi quyền truy cập.");
+        } catch (AppException ae) {
+            throw ae;
+        } catch (Exception e) {
+            log.error("deleteUser failed for id={}", id, e);
+            throw new AppException(HttpStatus.INTERNAL_SERVER_ERROR,
+                    "Không thể xóa tài khoản: " + e.getClass().getSimpleName() + " - " + e.getMessage());
+        }
     }
 
     /** POST /api/v1/admin/dashboard/users/{id}/fraud-flag — flag a user for fraud */

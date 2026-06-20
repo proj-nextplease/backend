@@ -31,13 +31,16 @@ public class QuestService {
     private final NamedParameterJdbcTemplate jdbcTemplate;
     private final ExpService expService;
     private final ReputationService reputationService;
+    private final CompanyAccessService companyAccessService;
 
     public QuestService(NamedParameterJdbcTemplate jdbcTemplate,
                         ExpService expService,
-                        ReputationService reputationService) {
+                        ReputationService reputationService,
+                        CompanyAccessService companyAccessService) {
         this.jdbcTemplate = jdbcTemplate;
         this.expService = expService;
         this.reputationService = reputationService;
+        this.companyAccessService = companyAccessService;
     }
 
     // ── Candidate: Search / Browse ────────────────────────────────────────────
@@ -155,6 +158,7 @@ public class QuestService {
                     qa.id,
                     qa.status,
                     qa.cover_note,
+                    qa.reject_reason as "rejectReason",
                     qa.applied_at as "appliedAt",
                     qa.updated_at as "updatedAt",
                     q.id          as "questId",
@@ -164,13 +168,43 @@ public class QuestService {
                     q.np_reward   as "npReward",
                     q.ends_at     as "endsAt",
                     c.name        as "companyName",
-                    c.logo_url    as "companyLogo"
+                    c.logo_url    as "companyLogo",
+                    r.score       as "ratingScore",
+                    r.comment     as "ratingComment",
+                    r.created_at  as "ratingAt"
                 from quest_applications qa
                 join quests q on q.id = qa.quest_id
                 join companies c on c.id = q.company_id
+                left join ratings r on r.quest_application_id = qa.id
                 where qa.candidate_id = :userId
                 order by qa.applied_at desc
                 """, Map.of("userId", userId));
+    }
+
+    /** Candidate withdraws their own quest application. */
+    @org.springframework.transaction.annotation.Transactional
+    public void withdrawQuestApplication(UUID userId, UUID applicationId) {
+        Map<String, Object> qa;
+        try {
+            qa = jdbcTemplate.queryForMap("""
+                    select id, status from quest_applications
+                    where id = :id and candidate_id = :userId
+                    """, Map.of("id", applicationId, "userId", userId));
+        } catch (org.springframework.dao.EmptyResultDataAccessException e) {
+            throw new com.nextplease.backend.exception.AppException(
+                    org.springframework.http.HttpStatus.NOT_FOUND, "Không tìm thấy đơn Quest.");
+        }
+        String current = (String) qa.get("status");
+        if (java.util.List.of("WITHDRAWN", "ACCEPTED", "COMPLETED", "REJECTED").contains(current)) {
+            throw new com.nextplease.backend.exception.AppException(
+                    org.springframework.http.HttpStatus.CONFLICT,
+                    "Không thể rút đơn khi trạng thái là " + current + ".");
+        }
+        jdbcTemplate.update("""
+                update quest_applications
+                set status = 'WITHDRAWN', updated_at = now()
+                where id = :id
+                """, Map.of("id", applicationId));
     }
 
     // ── Organizer: Create Quest ───────────────────────────────────────────────
@@ -178,15 +212,9 @@ public class QuestService {
     @Transactional
     public Map<String, Object> createQuest(UUID organizerUserId, Map<String, Object> request) {
         // Verify organizer owns a company
-        UUID companyId;
-        try {
-            companyId = jdbcTemplate.queryForObject(
-                    "select id from companies where owner_user_id = :userId and verification_status = 'APPROVED'",
-                    Map.of("userId", organizerUserId), UUID.class);
-        } catch (org.springframework.dao.EmptyResultDataAccessException e) {
-            throw new AppException(HttpStatus.FORBIDDEN,
-                    "Tài khoản của bạn chưa được xác minh là đối tác.");
-        }
+        UUID companyId = (UUID) companyAccessService.resolveApprovedCompanyForUser(organizerUserId).get("id");
+        // Only OWNER/MANAGER may create postings (MEMBER is view + review only)
+        companyAccessService.assertCanManagePostings(organizerUserId, companyId);
 
         String category = (String) request.get("category");
         int expReward = EXP_BY_CATEGORY.getOrDefault(category, 100);
@@ -243,7 +271,9 @@ public class QuestService {
                      and qa.status not in ('WITHDRAWN','REJECTED')) as "applicantCount"
                 from quests q
                 join companies c on c.id = q.company_id
-                where c.owner_user_id = :userId
+                where exists (select 1 from authority_nodes an
+                              where an.company_id = c.id and an.user_id = :userId
+                                and an.status = 'ACTIVE' and an.deleted_at is null)
                   and q.deleted_at is null
                 order by q.created_at desc
                 """, Map.of("userId", organizerUserId));
@@ -297,7 +327,10 @@ public class QuestService {
                     from quest_applications qa
                     join quests q on q.id = qa.quest_id
                     join companies c on c.id = q.company_id
-                    where qa.id = :appId and c.owner_user_id = :ownerId
+                    where qa.id = :appId
+                      and exists (select 1 from authority_nodes an
+                                  where an.company_id = c.id and an.user_id = :ownerId
+                                    and an.status = 'ACTIVE' and an.deleted_at is null)
                     """, Map.of("appId", applicationId, "ownerId", organizerUserId));
         } catch (org.springframework.dao.EmptyResultDataAccessException e) {
             throw new AppException(HttpStatus.FORBIDDEN, "Không có quyền cập nhật đơn này.");
@@ -305,9 +338,14 @@ public class QuestService {
 
         jdbcTemplate.update("""
                 update quest_applications
-                set status = :status, updated_at = now()
+                set status        = :status,
+                    reject_reason = :rejectReason,
+                    updated_at    = now()
                 where id = :id
-                """, Map.of("id", applicationId, "status", newStatus));
+                """, new org.springframework.jdbc.core.namedparam.MapSqlParameterSource()
+                .addValue("id", applicationId)
+                .addValue("status", newStatus)
+                .addValue("rejectReason", "REJECTED".equals(newStatus) ? rejectReason : null));
 
         // If completing, award EXP and NP
         if ("COMPLETED".equals(newStatus)) {
@@ -368,11 +406,110 @@ public class QuestService {
             jdbcTemplate.queryForObject("""
                     select q.id from quests q
                     join companies c on c.id = q.company_id
-                    where q.id = :questId and c.owner_user_id = :ownerId
+                    where q.id = :questId
+                      and exists (select 1 from authority_nodes an
+                                  where an.company_id = c.id and an.user_id = :ownerId
+                                    and an.status = 'ACTIVE' and an.deleted_at is null)
                     """, Map.of("questId", questId, "ownerId", organizerUserId), UUID.class);
         } catch (org.springframework.dao.EmptyResultDataAccessException e) {
             throw new AppException(HttpStatus.FORBIDDEN,
                     "Quest không tồn tại hoặc bạn không có quyền xem.");
+        }
+    }
+
+    // ── Organizer: Get Single Quest ───────────────────────────────────────────
+
+    public Map<String, Object> getOrganizerQuestById(UUID userId, UUID questId) {
+        verifyQuestOwnership(questId, userId);
+        try {
+            return jdbcTemplate.queryForMap("""
+                    select id, title, description, category, status, exp_reward as "expReward",
+                           min_req_rs as "minReqRs", capacity, ends_at as "endsAt",
+                           rejection_reason as "rejectionReason"
+                    from quests
+                    where id = :questId and deleted_at is null
+                    """, Map.of("questId", questId));
+        } catch (org.springframework.dao.EmptyResultDataAccessException e) {
+            throw new ResourceNotFoundException("Không tìm thấy Quest này.");
+        }
+    }
+
+    // ── Organizer: Update Quest ───────────────────────────────────────────────
+
+    @Transactional
+    public void updateQuest(UUID userId, UUID questId, Map<String, Object> request) {
+        verifyQuestOwnership(questId, userId);
+        companyAccessService.assertCanManagePostings(userId, getQuestCompanyId(questId));
+
+        // Any status can be edited; always resets to PENDING for Admin re-review
+        jdbcTemplate.update("""
+                update quests
+                set title       = coalesce(:title, title),
+                    description = coalesce(:description, description),
+                    category    = coalesce(:category, category),
+                    min_req_rs  = coalesce(:minReqRs, min_req_rs),
+                    capacity    = coalesce(:capacity, capacity),
+                    ends_at     = coalesce(cast(:endsAt as timestamptz), ends_at),
+                    status      = 'PENDING',
+                    updated_at  = now()
+                where id = :questId
+                """, new MapSqlParameterSource()
+                .addValue("title",       request.get("title"))
+                .addValue("description", request.get("description"))
+                .addValue("category",    request.get("category"))
+                .addValue("minReqRs",    request.get("minReqRs"))
+                .addValue("capacity",    request.get("capacity"))
+                .addValue("endsAt",      request.get("endsAt"))
+                .addValue("questId",     questId));
+    }
+
+    // ── Organizer: Close Quest ────────────────────────────────────────────────
+
+    @Transactional
+    public void closeQuest(UUID userId, UUID questId) {
+        verifyQuestOwnership(questId, userId);
+        UUID companyId = getQuestCompanyId(questId);
+        companyAccessService.assertCanManagePostings(userId, companyId);
+
+        int rows = jdbcTemplate.update("""
+                update quests set status = 'CLOSED', updated_at = now()
+                where id = :questId and status = 'OPEN' and deleted_at is null
+                """, Map.of("questId", questId));
+        if (rows == 0) {
+            throw new AppException(HttpStatus.CONFLICT,
+                    "Quest không ở trạng thái OPEN hoặc không tìm thấy.");
+        }
+    }
+
+    // ── Organizer: Delete Quest ───────────────────────────────────────────────
+
+    @Transactional
+    public void deleteQuest(UUID userId, UUID questId) {
+        verifyQuestOwnership(questId, userId);
+        UUID companyId = getQuestCompanyId(questId);
+        companyAccessService.assertCanManagePostings(userId, companyId);
+
+        // Block deleting OPEN quests — must close first
+        String status = jdbcTemplate.queryForObject(
+                "select status from quests where id = :id and deleted_at is null",
+                Map.of("id", questId), String.class);
+        if ("OPEN".equals(status)) {
+            throw new AppException(HttpStatus.CONFLICT,
+                    "Không thể xoá Quest đang OPEN. Hãy đóng Quest trước.");
+        }
+
+        int rows = jdbcTemplate.update(
+                "update quests set deleted_at = now() where id = :questId",
+                Map.of("questId", questId));
+        if (rows == 0) throw new ResourceNotFoundException("Quest không tồn tại.");
+    }
+
+    private UUID getQuestCompanyId(UUID questId) {
+        try {
+            return jdbcTemplate.queryForObject(
+                    "select company_id from quests where id = :id", Map.of("id", questId), UUID.class);
+        } catch (org.springframework.dao.EmptyResultDataAccessException e) {
+            throw new ResourceNotFoundException("Quest không tồn tại.");
         }
     }
 

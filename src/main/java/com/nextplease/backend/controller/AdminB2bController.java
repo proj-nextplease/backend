@@ -35,15 +35,18 @@ public class AdminB2bController {
     private final AdminB2bService adminB2bService;
     private final CurrentUserService currentUserService;
     private final NamedParameterJdbcTemplate jdbcTemplate;
+    private final com.nextplease.backend.service.CompanyMembershipService membershipService;
 
     public AdminB2bController(
             AdminB2bService adminB2bService,
             CurrentUserService currentUserService,
-            NamedParameterJdbcTemplate jdbcTemplate
+            NamedParameterJdbcTemplate jdbcTemplate,
+            com.nextplease.backend.service.CompanyMembershipService membershipService
     ) {
         this.adminB2bService = adminB2bService;
         this.currentUserService = currentUserService;
         this.jdbcTemplate = jdbcTemplate;
+        this.membershipService = membershipService;
     }
 
     /**
@@ -102,5 +105,21 @@ public class AdminB2bController {
         String reason = body.get("reason");
         adminB2bService.rejectB2b(companyId, reason, currentAdmin.appUserId());
         return ApiResponse.success("Đã từ chối phê duyệt tổ chức đối tác.");
+    }
+
+    /**
+     * Provisions an APPROVED company shell and emails an OWNER invitation to the representative.
+     * This replaces self-service B2B registration: the platform grants access to one person,
+     * who can then delegate/transfer to teammates.
+     */
+    @PostMapping("/provision")
+    public ApiResponse<Map<String, Object>> provisionCompany(@RequestBody Map<String, String> body) {
+        MeResponse currentAdmin = requireAdmin();
+        Map<String, Object> result = membershipService.provisionCompany(
+                currentAdmin.appUserId(),
+                body.get("name"),
+                body.get("companyType"),
+                body.get("representativeEmail"));
+        return ApiResponse.success(result);
     }
 }

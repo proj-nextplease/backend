@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -63,6 +64,14 @@ public class ApplicationController {
         UUID userId = currentUserService.getCurrentUser().appUserId();
         applicationService.updateApplicationStatus(id, userId, body.status(), body.rejectReason());
         return ApiResponse.success("Cập nhật trạng thái thành công.");
+    }
+
+    /** PATCH /api/v1/me/applications/{id}/withdraw — candidate withdraws own application */
+    @PatchMapping("/me/applications/{id}/withdraw")
+    public ApiResponse<String> withdrawApplication(@PathVariable UUID id) {
+        UUID userId = currentUserService.getCurrentUser().appUserId();
+        applicationService.withdrawApplication(userId, id);
+        return ApiResponse.success("Đã rút đơn ứng tuyển.");
     }
 
     record ApplyRequest(@Size(max = 1000) String coverNote) {}

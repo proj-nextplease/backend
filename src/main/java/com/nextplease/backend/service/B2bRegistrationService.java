@@ -24,15 +24,18 @@ public class B2bRegistrationService {
     private final NamedParameterJdbcTemplate jdbcTemplate;
     private final SupabaseAdminService supabaseAdminService;
     private final AppUserRepository appUserRepository;
+    private final CompanyAccessService companyAccessService;
 
     public B2bRegistrationService(
             NamedParameterJdbcTemplate jdbcTemplate,
             SupabaseAdminService supabaseAdminService,
-            AppUserRepository appUserRepository
+            AppUserRepository appUserRepository,
+            CompanyAccessService companyAccessService
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.supabaseAdminService = supabaseAdminService;
         this.appUserRepository = appUserRepository;
+        this.companyAccessService = companyAccessService;
     }
 
     @Transactional
@@ -194,6 +197,20 @@ public class B2bRegistrationService {
                     .addValue("advisorContact", request.advisorContact() != null ? request.advisorContact() : "{}")
             );
 
+            // 8.5. Grant the registering user an OWNER authority node (membership model)
+            jdbcTemplate.update("""
+                    insert into authority_nodes (company_id, user_id, node_type, node_role, status, approved_by, approved_at)
+                    select id,
+                           owner_user_id,
+                           case when company_type = 'CLUB' then 'CLUB_LEADER' else 'COMPANY_MANAGER' end,
+                           'OWNER',
+                           'ACTIVE',
+                           owner_user_id,
+                           now()
+                    from companies
+                    where owner_user_id = :userId
+                    """, Map.of("userId", userId));
+
             // 9. Write audit log
             jdbcTemplate.update("""
                     insert into audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
@@ -233,44 +250,59 @@ public class B2bRegistrationService {
 
     public Map<String, Object> getMyCompany(UUID userId) {
         log.info("Fetching B2B company profile for user: {}", userId);
-        try {
-            return jdbcTemplate.queryForMap("""
-                    select id,
-                           owner_user_id as "ownerUserId",
-                           name,
-                           company_type as "companyType",
-                           description,
-                           website_url as "websiteUrl",
-                           logo_url as "logoUrl",
-                           document_url as "documentUrl",
-                           tax_code as "taxCode",
-                           representative_name as "representativeName",
-                           representative_phone as "representativePhone",
-                           school_id as "schoolId",
-                           fanpage_url as "fanpageUrl",
-                           advisor_contact as "advisorContact",
-                           verification_status as "verificationStatus",
-                           rejection_reason as "rejectionReason"
-                    from companies
-                    where owner_user_id = :userId
-                    """, Map.of("userId", userId));
-        } catch (org.springframework.dao.EmptyResultDataAccessException e) {
-            throw new com.nextplease.backend.exception.ResourceNotFoundException("Tài khoản này chưa đăng ký thông tin đối tác.");
+        UUID companyId = companyAccessService.findActiveCompanyId(userId)
+                .orElseThrow(() -> new com.nextplease.backend.exception.ResourceNotFoundException(
+                        "Tài khoản này chưa được cấp quyền cho tổ chức đối tác nào."));
+        Map<String, Object> company = jdbcTemplate.queryForMap("""
+                select id,
+                       owner_user_id as "ownerUserId",
+                       name,
+                       company_type as "companyType",
+                       description,
+                       website_url as "websiteUrl",
+                       logo_url as "logoUrl",
+                       document_url as "documentUrl",
+                       tax_code as "taxCode",
+                       representative_name as "representativeName",
+                       representative_phone as "representativePhone",
+                       school_id as "schoolId",
+                       fanpage_url as "fanpageUrl",
+                       advisor_contact as "advisorContact",
+                       verification_status as "verificationStatus",
+                       rejection_reason as "rejectionReason"
+                from companies
+                where id = :companyId
+                """, Map.of("companyId", companyId));
+        // Surface the caller's role so the UI can gate owner-only actions.
+        company.put("myRole", companyAccessService.roleInCompany(userId, companyId));
+        return company;
+    }
+
+    /** Resolves the company the user manages and asserts OWNER/MANAGER rights for mutations. */
+    private UUID resolveManagedCompanyId(UUID userId) {
+        UUID companyId = companyAccessService.findActiveCompanyId(userId)
+                .orElseThrow(() -> new com.nextplease.backend.exception.ResourceNotFoundException(
+                        "Không tìm thấy thông tin đối tác để cập nhật."));
+        String role = companyAccessService.roleInCompany(userId, companyId);
+        if (!"OWNER".equals(role) && !"MANAGER".equals(role)) {
+            throw new AppException(HttpStatus.FORBIDDEN, "Bạn không có quyền chỉnh sửa hồ sơ tổ chức.");
         }
+        return companyId;
     }
 
     @Transactional
     public void updateCompanyDocument(UUID userId, String documentUrl) {
         log.info("Resubmitting B2B verification document for user: {}", userId);
+        UUID companyId = resolveManagedCompanyId(userId);
         int updated = jdbcTemplate.update("""
                 update companies
                 set document_url = :documentUrl,
                     verification_status = 'PENDING',
                     rejection_reason = null,
                     updated_at = now()
-                where owner_user_id = :userId
+                where id = :companyId
                 """, Map.of(
-                "userId", userId,
+                "companyId", companyId,
                 "documentUrl", documentUrl
         ));
 
@@ -296,6 +328,7 @@ public class B2bRegistrationService {
     @Transactional
     public void updateCompanyProfile(UUID userId, B2bUpdateRequest request) {
         log.info("Updating B2B company profile for user: {}", userId);
+        UUID companyId = resolveManagedCompanyId(userId);
 
         UUID schoolUuid = null;
         if (request.schoolId() != null && !request.schoolId().isBlank()) {
@@ -323,9 +356,9 @@ public class B2bRegistrationService {
                     verification_status = 'PENDING',
                     rejection_reason = null,
                     updated_at = now()
-                where owner_user_id = :userId
+                where id = :companyId
                 """, new MapSqlParameterSource()
-                .addValue("userId", userId)
+                .addValue("companyId", companyId)
                 .addValue("name", request.companyName().trim())
                 .addValue("companyType", request.companyType().toUpperCase().trim())
                 .addValue("description", request.description())

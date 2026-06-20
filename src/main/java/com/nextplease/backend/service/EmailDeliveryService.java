@@ -92,6 +92,94 @@ public class EmailDeliveryService {
         }
     }
 
+    /**
+     * Sends an organization-membership invitation email containing the redeem link.
+     * No-op when mail delivery is disabled (the caller still returns the link in the API response).
+     */
+    public void sendCompanyInvitation(
+            String recipientEmail,
+            String companyName,
+            String roleLabel,
+            String inviteUrl,
+            OffsetDateTime expiresAt
+    ) {
+        if (!isEnabled()) {
+            return;
+        }
+
+        String subject = "Lời mời tham gia " + companyName + " trên nextplease";
+        String safeCompany = escapeHtml(companyName);
+        String safeRole = escapeHtml(roleLabel);
+        String safeUrl = escapeHtml(inviteUrl);
+        String safeExpires = escapeHtml(VIETNAM_TIME_FORMATTER.format(expiresAt));
+
+        String textContent = """
+                Xin chào,
+
+                Bạn được mời tham gia tổ chức "%s" trên nextplease với vai trò %s.
+
+                Nhấn vào liên kết sau để chấp nhận lời mời (đăng nhập hoặc đăng ký bằng chính email này):
+                %s
+
+                Lời mời có hiệu lực đến %s (giờ Việt Nam).
+
+                nextplease
+                """.formatted(companyName, roleLabel, inviteUrl, VIETNAM_TIME_FORMATTER.format(expiresAt));
+
+        String htmlContent = """
+                <!doctype html>
+                <html lang="vi">
+                  <body style="margin:0;background:#f4f7ff;font-family:Arial,Helvetica,sans-serif;color:#111827;">
+                    <table role="presentation" width="100%%" cellspacing="0" cellpadding="0" style="background:#f4f7ff;padding:32px 16px;">
+                      <tr><td align="center">
+                        <table role="presentation" width="100%%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#ffffff;border-radius:28px;overflow:hidden;border:1px solid #dfe7fb;">
+                          <tr><td style="padding:34px 34px 20px;background:linear-gradient(135deg,#2563eb,#ff7a1a);color:#ffffff;">
+                            <div style="font-size:14px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;">nextplease</div>
+                            <h1 style="margin:18px 0 10px;font-size:28px;line-height:1.2;">Lời mời tham gia tổ chức</h1>
+                          </td></tr>
+                          <tr><td style="padding:34px;">
+                            <p style="margin:0 0 16px;font-size:17px;line-height:1.6;">Bạn được mời tham gia <strong>%s</strong> với vai trò <strong>%s</strong>.</p>
+                            <p style="margin:0 0 24px;font-size:16px;line-height:1.7;color:#4b5563;">Đăng nhập hoặc đăng ký bằng chính email này rồi nhấn nút bên dưới để chấp nhận.</p>
+                            <div style="text-align:center;">
+                              <a href="%s" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:700;padding:14px 28px;border-radius:14px;">Chấp nhận lời mời</a>
+                            </div>
+                            <p style="margin:24px 0 0;font-size:14px;line-height:1.7;color:#6b7280;">Lời mời có hiệu lực đến %s (giờ Việt Nam).</p>
+                          </td></tr>
+                        </table>
+                      </td></tr>
+                    </table>
+                  </body>
+                </html>
+                """.formatted(safeCompany, safeRole, safeUrl, safeExpires);
+
+        try {
+            Map<String, Object> requestBody = Map.of(
+                    "sender", Map.of("name", fromName, "email", fromAddress),
+                    "to", List.of(Map.of("email", recipientEmail)),
+                    "subject", subject,
+                    "htmlContent", htmlContent,
+                    "textContent", textContent
+            );
+            restClient.post()
+                    .uri("/smtp/email")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(requestBody)
+                    .retrieve()
+                    .onStatus(status -> status.isError(), (req, res) -> {
+                        String responseBody = new String(res.getBody().readAllBytes());
+                        log.error("Brevo rejected company invitation email to={}: {} – {}",
+                                recipientEmail, res.getStatusCode(), responseBody);
+                        throw new EmailSendException(
+                                "Brevo " + res.getStatusCode() + ": " + responseBody, null);
+                    })
+                    .toBodilessEntity();
+            log.info("Sent company invitation email to={} for company={}", recipientEmail, companyName);
+        } catch (Exception exception) {
+            log.error("Failed to send company invitation email to={}: {}", recipientEmail, exception.getMessage(), exception);
+            throw new EmailSendException("Could not send company invitation email: " + exception.getMessage(), exception);
+        }
+    }
+
     private String buildCandidateOtpText(String displayName, String otp, OffsetDateTime expiresAt) {
         String safeName = normalizeDisplayName(displayName);
         return """
