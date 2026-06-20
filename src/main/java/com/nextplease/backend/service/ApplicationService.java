@@ -137,7 +137,10 @@ public class ApplicationService {
             jdbcTemplate.queryForObject("""
                     select j.id from jobs j
                     join companies c on c.id = j.company_id
-                    where j.id = :jobId and c.owner_user_id = :ownerId
+                    where j.id = :jobId
+                      and exists (select 1 from authority_nodes an
+                                  where an.company_id = c.id and an.user_id = :ownerId
+                                    and an.status = 'ACTIVE' and an.deleted_at is null)
                     """, Map.of("jobId", jobId, "ownerId", organizerUserId), UUID.class);
         } catch (org.springframework.dao.EmptyResultDataAccessException e) {
             throw new AppException(HttpStatus.FORBIDDEN, "Tin tuyển dụng không tồn tại hoặc bạn không có quyền xem.");
@@ -186,7 +189,10 @@ public class ApplicationService {
                     select a.id, a.candidate_id, j.job_type from applications a
                     join jobs j on j.id = a.job_id
                     join companies c on c.id = j.company_id
-                    where a.id = :appId and c.owner_user_id = :ownerId
+                    where a.id = :appId
+                      and exists (select 1 from authority_nodes an
+                                  where an.company_id = c.id and an.user_id = :ownerId
+                                    and an.status = 'ACTIVE' and an.deleted_at is null)
                     """, Map.of("appId", applicationId, "ownerId", organizerUserId));
         } catch (org.springframework.dao.EmptyResultDataAccessException e) {
             throw new AppException(HttpStatus.FORBIDDEN, "Không có quyền cập nhật đơn ứng tuyển này.");
@@ -194,10 +200,14 @@ public class ApplicationService {
 
         jdbcTemplate.update("""
                 update applications
-                set status     = :status,
-                    updated_at = now()
+                set status        = :status,
+                    reject_reason = :rejectReason,
+                    updated_at    = now()
                 where id = :id
-                """, Map.of("id", applicationId, "status", newStatus));
+                """, new MapSqlParameterSource()
+                .addValue("id", applicationId)
+                .addValue("status", newStatus)
+                .addValue("rejectReason", "REJECTED".equals(newStatus) ? rejectReason : null));
 
         // Award EXP when organizer marks a job application as COMPLETED
         if ("COMPLETED".equals(newStatus)) {
@@ -223,6 +233,7 @@ public class ApplicationService {
                     a.id,
                     a.status,
                     a.cover_note,
+                    a.reject_reason,
                     a.applied_at,
                     a.updated_at,
                     j.id            as job_id,
@@ -236,13 +247,42 @@ public class ApplicationService {
                     j.deadline_at,
                     c.id            as company_id,
                     c.name          as company_name,
-                    c.logo_url      as company_logo
+                    c.logo_url      as company_logo,
+                    r.score         as rating_score,
+                    r.comment       as rating_comment,
+                    r.created_at    as rating_at
                 from applications a
                 join jobs j on j.id = a.job_id
                 join companies c on c.id = j.company_id
+                left join ratings r on r.application_id = a.id
                 where a.candidate_id = :userId
                 order by a.applied_at desc
                 """, Map.of("userId", userId));
+    }
+
+    /** Candidate withdraws their own application. Only allowed for non-terminal statuses. */
+    @Transactional
+    public void withdrawApplication(UUID userId, UUID applicationId) {
+        Map<String, Object> app;
+        try {
+            app = jdbcTemplate.queryForMap("""
+                    select id, status from applications
+                    where id = :id and candidate_id = :userId
+                    """, Map.of("id", applicationId, "userId", userId));
+        } catch (org.springframework.dao.EmptyResultDataAccessException e) {
+            throw new AppException(HttpStatus.NOT_FOUND, "Không tìm thấy đơn ứng tuyển.");
+        }
+        String current = (String) app.get("status");
+        if (List.of("WITHDRAWN", "ACCEPTED", "COMPLETED", "REJECTED").contains(current)) {
+            throw new AppException(HttpStatus.CONFLICT,
+                    "Không thể rút đơn khi trạng thái là " + current + ".");
+        }
+        jdbcTemplate.update("""
+                update applications
+                set status = 'WITHDRAWN', updated_at = now()
+                where id = :id
+                """, Map.of("id", applicationId));
+        log.info("[ApplicationService] Candidate {} withdrew application {}", userId, applicationId);
     }
 
     // ── private helpers ──────────────────────────────────────────────────────

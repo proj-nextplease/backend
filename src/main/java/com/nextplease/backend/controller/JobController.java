@@ -9,7 +9,9 @@ import jakarta.validation.Valid;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -80,6 +82,26 @@ public class JobController {
         MeResponse currentUser = currentUserService.getCurrentUser();
         List<Map<String, Object>> list = jobService.getOrganizerJobs(currentUser.appUserId());
         return ApiResponse.success(list);
+    }
+
+    @GetMapping("/organizer/jobs/{id}")
+    public ApiResponse<Map<String, Object>> getOrganizerJobById(@PathVariable UUID id) {
+        MeResponse currentUser = currentUserService.getCurrentUser();
+        return ApiResponse.success(jobService.getOrganizerJobById(currentUser.appUserId(), id));
+    }
+
+    @PatchMapping("/organizer/jobs/{id}/close")
+    public ApiResponse<String> closeJob(@PathVariable UUID id) {
+        MeResponse currentUser = currentUserService.getCurrentUser();
+        jobService.closeJob(currentUser.appUserId(), id);
+        return ApiResponse.success("Đã đóng tin tuyển dụng.");
+    }
+
+    @DeleteMapping("/organizer/jobs/{id}")
+    public ApiResponse<String> deleteJob(@PathVariable UUID id) {
+        MeResponse currentUser = currentUserService.getCurrentUser();
+        jobService.deleteJob(currentUser.appUserId(), id);
+        return ApiResponse.success("Xoá tin tuyển dụng thành công.");
     }
 
     @GetMapping("/skills")
