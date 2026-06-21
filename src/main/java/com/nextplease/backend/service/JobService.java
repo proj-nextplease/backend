@@ -300,6 +300,7 @@ public class JobService {
                        compensation,
                        min_req_rs as "minReqRs",
                        status,
+                       rejection_reason as "rejectionReason",
                        deadline_at as "deadlineAt",
                        created_at as "createdAt",
                        (select count(*) from applications where job_id = jobs.id) as "applicantsCount"

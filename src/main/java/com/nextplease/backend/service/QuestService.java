@@ -260,6 +260,7 @@ public class QuestService {
                     q.title,
                     q.category,
                     q.status,
+                    q.rejection_reason as "rejectionReason",
                     q.exp_reward  as "expReward",
                     q.np_reward   as "npReward",
                     q.min_req_rs  as "minReqRs",
