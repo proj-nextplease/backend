@@ -33,11 +33,16 @@ public class ApplicationService {
     private final NamedParameterJdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
     private final ExpService expService;
+    private final ReputationService reputationService;
+    private final ConfigService configService;
 
-    public ApplicationService(NamedParameterJdbcTemplate jdbcTemplate, ObjectMapper objectMapper, ExpService expService) {
+    public ApplicationService(NamedParameterJdbcTemplate jdbcTemplate, ObjectMapper objectMapper,
+                              ExpService expService, ReputationService reputationService, ConfigService configService) {
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
         this.expService = expService;
+        this.reputationService = reputationService;
+        this.configService = configService;
     }
 
     /**
@@ -50,7 +55,7 @@ public class ApplicationService {
      *   ALREADY_APPLIED  — duplicate application
      */
     @Transactional
-    public Map<String, Object> apply(UUID userId, UUID jobId, String coverNote) {
+    public Map<String, Object> apply(UUID userId, UUID jobId, String coverNote, Map<String, String> answers) {
         // 1. Fetch job
         Map<String, Object> job = fetchJobOrThrow(jobId);
 
@@ -100,18 +105,22 @@ public class ApplicationService {
         // 5. Snapshot eligibility at time of application
         String snapshot = buildSnapshot(myRs, candidate);
 
+        // 5b. Validate + snapshot custom form answers (denormalized [{label,value}])
+        String customAnswersJson = buildCustomAnswers(jobId, answers);
+
         // 6. Insert application
         UUID applicationId;
         try {
             applicationId = jdbcTemplate.queryForObject("""
-                    insert into applications (job_id, candidate_id, status, cover_note, eligibility_snapshot)
-                    values (:jobId, :userId, 'SUBMITTED', :coverNote, :snapshot::jsonb)
+                    insert into applications (job_id, candidate_id, status, cover_note, eligibility_snapshot, custom_answers)
+                    values (:jobId, :userId, 'SUBMITTED', :coverNote, :snapshot::jsonb, :answers::jsonb)
                     returning id
                     """, new MapSqlParameterSource()
                     .addValue("jobId", jobId)
                     .addValue("userId", userId)
                     .addValue("coverNote", coverNote)
-                    .addValue("snapshot", snapshot),
+                    .addValue("snapshot", snapshot)
+                    .addValue("answers", customAnswersJson),
                     UUID.class);
         } catch (DuplicateKeyException e) {
             throw new AppException(HttpStatus.CONFLICT,
@@ -153,6 +162,7 @@ public class ApplicationService {
                     a.cover_note,
                     a.applied_at,
                     a.eligibility_snapshot,
+                    a.custom_answers::text as custom_answers,
                     u.id            as candidate_id,
                     u.display_name  as candidate_name,
                     u.email         as candidate_email,
@@ -186,7 +196,7 @@ public class ApplicationService {
         Map<String, Object> appInfo;
         try {
             appInfo = jdbcTemplate.queryForMap("""
-                    select a.id, a.candidate_id, j.job_type from applications a
+                    select a.id, a.candidate_id, a.status, j.job_type from applications a
                     join jobs j on j.id = a.job_id
                     join companies c on c.id = j.company_id
                     where a.id = :appId
@@ -196,6 +206,13 @@ public class ApplicationService {
                     """, Map.of("appId", applicationId, "ownerId", organizerUserId));
         } catch (org.springframework.dao.EmptyResultDataAccessException e) {
             throw new AppException(HttpStatus.FORBIDDEN, "Không có quyền cập nhật đơn ứng tuyển này.");
+        }
+
+        // Guard: only an ACCEPTED application can be marked COMPLETED
+        String currentStatus = (String) appInfo.get("status");
+        if ("COMPLETED".equals(newStatus) && !"ACCEPTED".equals(currentStatus)) {
+            throw new AppException(HttpStatus.CONFLICT,
+                    "Chỉ có thể đánh dấu hoàn thành khi đơn đang ở trạng thái 'Chấp nhận'.");
         }
 
         jdbcTemplate.update("""
@@ -220,7 +237,13 @@ public class ApplicationService {
             expService.addExp(profileId, expAmount,
                     "JOB_COMPLETED",
                     "job_application", applicationId);
-            log.info("[ApplicationService] Awarded {} EXP to candidate {} for completing job (type={})", expAmount, candidateUserId, jobType);
+            // +RS for completing a job (idempotent; mirrors quest completion)
+            int rsReward = configService.getInt("rs_job_completed", 5);
+            if (rsReward > 0) {
+                reputationService.addReputation(profileId, rsReward,
+                        "JOB_COMPLETED", "job_application", applicationId);
+            }
+            log.info("[ApplicationService] Awarded {} EXP + {} RS to candidate {} for completing job (type={})", expAmount, rsReward, candidateUserId, jobType);
         }
 
         log.info("[ApplicationService] Organizer {} updated application {} → {}", organizerUserId, applicationId, newStatus);
@@ -342,6 +365,35 @@ public class ApplicationService {
             return objectMapper.writeValueAsString(snap);
         } catch (Exception e) {
             return "{}";
+        }
+    }
+
+    /** Validates required custom fields and returns a denormalized JSON snapshot [{label,value}], or null. */
+    private String buildCustomAnswers(UUID jobId, Map<String, String> answers) {
+        List<Map<String, Object>> fields = jdbcTemplate.queryForList(
+                "select id, label, required from job_form_fields where job_id = :jobId order by sort_order",
+                Map.of("jobId", jobId));
+        if (fields.isEmpty()) return null;
+
+        List<Map<String, String>> out = new java.util.ArrayList<>();
+        for (Map<String, Object> f : fields) {
+            String fieldId = f.get("id").toString();
+            String label = (String) f.get("label");
+            boolean required = Boolean.TRUE.equals(f.get("required"));
+            String val = answers != null ? answers.get(fieldId) : null;
+            if (required && (val == null || val.isBlank())) {
+                throw new AppException(HttpStatus.BAD_REQUEST,
+                        "Vui lòng trả lời câu hỏi bắt buộc: " + label);
+            }
+            if (val != null && !val.isBlank()) {
+                out.add(Map.of("label", label, "value", val.trim()));
+            }
+        }
+        if (out.isEmpty()) return null;
+        try {
+            return objectMapper.writeValueAsString(out);
+        } catch (Exception e) {
+            return null;
         }
     }
 }

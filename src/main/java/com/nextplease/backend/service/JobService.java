@@ -118,6 +118,9 @@ public class JobService {
             }
         }
 
+        // 4b. Custom application form fields
+        insertFormFields(jobId, request.formFields());
+
         // 5. Audit Log
         jdbcTemplate.update("""
                 insert into audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
@@ -195,6 +198,10 @@ public class JobService {
                 ));
             }
         }
+
+        // Refresh custom form fields
+        jdbcTemplate.update("delete from job_form_fields where job_id = :jobId", Map.of("jobId", jobId));
+        insertFormFields(jobId, request.formFields());
 
         // Audit Log
         jdbcTemplate.update("""
@@ -316,6 +323,7 @@ public class JobService {
         Map<String, Object> job = getJobDetailsRaw(jobId);
         List<Map<String, Object>> skills = getJobSkills(jobId);
         job.put("skills", skills);
+        job.put("formFields", getJobFormFields(jobId));
         return job;
     }
 
@@ -394,6 +402,33 @@ public class JobService {
                 """, Map.of("jobId", jobId));
     }
 
+    List<Map<String, Object>> getJobFormFields(UUID jobId) {
+        return jdbcTemplate.queryForList("""
+                select id, label, field_type as "fieldType", options, required, sort_order as "sortOrder"
+                from job_form_fields
+                where job_id = :jobId
+                order by sort_order
+                """, Map.of("jobId", jobId));
+    }
+
+    private void insertFormFields(UUID jobId, List<JobCreateRequest.FormField> fields) {
+        if (fields == null) return;
+        int order = 0;
+        for (JobCreateRequest.FormField f : fields) {
+            if (f.label() == null || f.label().isBlank()) continue;
+            jdbcTemplate.update("""
+                    insert into job_form_fields (job_id, label, field_type, options, required, sort_order)
+                    values (:jobId, :label, :type, :options, :required, :order)
+                    """, new MapSqlParameterSource()
+                    .addValue("jobId", jobId)
+                    .addValue("label", f.label().trim())
+                    .addValue("type", f.fieldType() != null ? f.fieldType().toUpperCase().trim() : "TEXT")
+                    .addValue("options", f.options())
+                    .addValue("required", f.required() != null && f.required())
+                    .addValue("order", order++));
+        }
+    }
+
     public Map<String, Object> getOrganizerJobById(UUID userId, UUID jobId) {
         Map<String, Object> company = verifyAndGetApprovedCompany(userId);
         UUID companyId = (UUID) company.get("id");
@@ -406,6 +441,7 @@ public class JobService {
                     where id = :jobId and company_id = :companyId
                     """, Map.of("jobId", jobId, "companyId", companyId));
             job.put("skills", getJobSkills(jobId));
+            job.put("formFields", getJobFormFields(jobId));
             return job;
         } catch (org.springframework.dao.EmptyResultDataAccessException e) {
             throw new ResourceNotFoundException("Không tìm thấy tin tuyển dụng này.");

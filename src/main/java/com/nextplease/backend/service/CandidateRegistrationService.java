@@ -45,6 +45,7 @@ public class CandidateRegistrationService {
     private final EmailDeliveryService emailDeliveryService;
     private final SupabaseAdminService supabaseAdminService;
     private final ReputationService reputationService;
+    private final ConfigService configService;
     private final SecureRandom secureRandom = new SecureRandom();
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
     private final boolean exposeDevOtp;
@@ -54,12 +55,14 @@ public class CandidateRegistrationService {
             EmailDeliveryService emailDeliveryService,
             SupabaseAdminService supabaseAdminService,
             ReputationService reputationService,
+            ConfigService configService,
             @Value("${app.auth.registration.expose-dev-otp:true}") boolean exposeDevOtp
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.emailDeliveryService = emailDeliveryService;
         this.supabaseAdminService = supabaseAdminService;
         this.reputationService = reputationService;
+        this.configService = configService;
         this.exposeDevOtp = exposeDevOtp;
     }
 
@@ -256,7 +259,7 @@ public class CandidateRegistrationService {
                 """, Map.of("userId", userId));
 
         // +10 RS for verifying student email — idempotent via unique index on source
-        reputationService.addReputation(profileId, 10, "EMAIL_VERIFIED", "registration", attempt.id());
+        reputationService.addReputation(profileId, configService.getInt("rs_email_verified", 10), "EMAIL_VERIFIED", "registration", attempt.id());
 
         jdbcTemplate.update("""
                 insert into audit_logs (actor_user_id, action, entity_type, entity_id, metadata)

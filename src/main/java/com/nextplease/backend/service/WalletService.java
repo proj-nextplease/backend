@@ -26,10 +26,15 @@ public class WalletService {
     private static final ZoneId VN = ZoneId.of("Asia/Ho_Chi_Minh");
 
     private final NamedParameterJdbcTemplate jdbcTemplate;
+    private final ConfigService configService;
 
-    public WalletService(NamedParameterJdbcTemplate jdbcTemplate) {
+    public WalletService(NamedParameterJdbcTemplate jdbcTemplate, ConfigService configService) {
         this.jdbcTemplate = jdbcTemplate;
+        this.configService = configService;
     }
+
+    private int premiumPriceNp() { return configService.getInt("premium_price_np", PREMIUM_PRICE_NP); }
+    private int minTopupVnd() { return configService.getInt("min_topup_vnd", MIN_TOPUP_VND); }
 
     /** Returns wallet balance, premium status, and last 20 transactions. */
     public Map<String, Object> getWallet(UUID userId) {
@@ -66,8 +71,8 @@ public class WalletService {
         result.put("isPremium", isPremium);
         result.put("premiumUntil", premiumUntil != null ? premiumUntil.toString() : null);
         result.put("recentTransactions", recentTx);
-        result.put("premiumPriceNp", PREMIUM_PRICE_NP);
-        result.put("minTopupVnd", MIN_TOPUP_VND);
+        result.put("premiumPriceNp", premiumPriceNp());
+        result.put("minTopupVnd", minTopupVnd());
         return result;
     }
 
@@ -78,9 +83,10 @@ public class WalletService {
      */
     @Transactional
     public Map<String, Object> topUp(UUID userId, int amountVnd) {
-        if (amountVnd < MIN_TOPUP_VND) {
+        int minTopup = minTopupVnd();
+        if (amountVnd < minTopup) {
             throw new AppException(HttpStatus.BAD_REQUEST,
-                    String.format("Số tiền nạp tối thiểu là %,d VND.", MIN_TOPUP_VND));
+                    String.format("Số tiền nạp tối thiểu là %,d VND.", minTopup));
         }
         if (amountVnd > 10_000_000) {
             throw new AppException(HttpStatus.BAD_REQUEST, "Số tiền nạp tối đa một lần là 10,000,000 VND.");
@@ -145,15 +151,16 @@ public class WalletService {
         // Lock wallet
         Map<String, Object> wallet = lockWalletOrThrow(userId);
         int balance = ((Number) wallet.get("np_balance")).intValue();
+        int premiumPrice = premiumPriceNp();
 
-        if (balance < PREMIUM_PRICE_NP) {
+        if (balance < premiumPrice) {
             throw new AppException(HttpStatus.PAYMENT_REQUIRED,
-                    String.format("Số dư NP không đủ. Cần %,d NP, hiện tại %,d NP.", PREMIUM_PRICE_NP, balance),
+                    String.format("Số dư NP không đủ. Cần %,d NP, hiện tại %,d NP.", premiumPrice, balance),
                     "INSUFFICIENT_NP");
         }
 
         // Deduct NP
-        int newBalance = balance - PREMIUM_PRICE_NP;
+        int newBalance = balance - premiumPrice;
         jdbcTemplate.update("""
                 update wallets set np_balance = :balance, updated_at = now()
                 where id = :walletId
@@ -169,7 +176,7 @@ public class WalletService {
                      :ikey)
                 """, new MapSqlParameterSource()
                 .addValue("walletId", wallet.get("id"))
-                .addValue("amount", -PREMIUM_PRICE_NP)
+                .addValue("amount", -premiumPrice)
                 .addValue("balanceAfter", newBalance)
                 .addValue("ikey", "premium_" + userId + "_" + System.currentTimeMillis()));
 
@@ -202,7 +209,7 @@ public class WalletService {
                 """, new MapSqlParameterSource()
                 .addValue("userId", userId)
                 .addValue("plan", PREMIUM_PLAN)
-                .addValue("price", PREMIUM_PRICE_NP)
+                .addValue("price", premiumPrice)
                 .addValue("expiry", newExpiry));
 
         log.info("[WalletService] User {} bought Premium Pass → expires {}", userId, newExpiry);

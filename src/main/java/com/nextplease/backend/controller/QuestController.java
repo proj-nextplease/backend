@@ -40,6 +40,12 @@ public class QuestController {
         return ApiResponse.success(questService.searchQuests(keyword, category, 0));
     }
 
+    /** GET /api/v1/quests/exp-config — live EXP-per-category for the create form */
+    @GetMapping("/quests/exp-config")
+    public ApiResponse<Map<String, Integer>> getExpConfig() {
+        return ApiResponse.success(questService.getExpConfig());
+    }
+
     /** POST /api/v1/quests/{id}/apply */
     @PostMapping("/quests/{id}/apply")
     public ApiResponse<Map<String, Object>> applyToQuest(
@@ -48,7 +54,8 @@ public class QuestController {
     ) {
         UUID userId = currentUserService.getCurrentUser().appUserId();
         String coverNote = body != null ? body.coverNote() : "";
-        return ApiResponse.success(questService.applyToQuest(userId, id, coverNote));
+        Map<String, String> answers = body != null ? body.answers() : null;
+        return ApiResponse.success(questService.applyToQuest(userId, id, coverNote, answers));
     }
 
     /** GET /api/v1/me/quest-applications */
@@ -133,6 +140,6 @@ public class QuestController {
 
     // ── Request records ───────────────────────────────────────────────────────
 
-    record QuestApplyRequest(String coverNote) {}
+    record QuestApplyRequest(String coverNote, Map<String, String> answers) {}
     record QuestStatusRequest(String status, String rejectReason) {}
 }

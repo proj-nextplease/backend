@@ -34,15 +34,18 @@ public class ProfileService {
     private final NamedParameterJdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
     private final ReputationService reputationService;
+    private final ConfigService configService;
 
     public ProfileService(
             NamedParameterJdbcTemplate jdbcTemplate,
             ObjectMapper objectMapper,
-            ReputationService reputationService
+            ReputationService reputationService,
+            ConfigService configService
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
         this.reputationService = reputationService;
+        this.configService = configService;
     }
 
     private HttpServletRequest getCurrentRequest() {
@@ -469,7 +472,7 @@ public class ProfileService {
 
         // 9. +5 RS once when onboarding flips from false → true
         if (!isDraft && !wasOnboardingCompleted) {
-            reputationService.addReputation(profileId, 5, "ONBOARDING_COMPLETED", "profile", profileId);
+            reputationService.addReputation(profileId, configService.getInt("rs_onboarding", 5), "ONBOARDING_COMPLETED", "profile", profileId);
         }
     }
 

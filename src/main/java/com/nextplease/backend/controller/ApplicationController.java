@@ -35,7 +35,8 @@ public class ApplicationController {
     ) {
         UUID userId = currentUserService.getCurrentUser().appUserId();
         String coverNote = body != null ? body.coverNote() : null;
-        Map<String, Object> result = applicationService.apply(userId, id, coverNote);
+        Map<String, String> answers = body != null ? body.answers() : null;
+        Map<String, Object> result = applicationService.apply(userId, id, coverNote, answers);
         return ApiResponse.success(result);
     }
 
@@ -74,6 +75,6 @@ public class ApplicationController {
         return ApiResponse.success("Đã rút đơn ứng tuyển.");
     }
 
-    record ApplyRequest(@Size(max = 1000) String coverNote) {}
+    record ApplyRequest(@Size(max = 1000) String coverNote, Map<String, String> answers) {}
     record StatusUpdateRequest(String status, String rejectReason) {}
 }
