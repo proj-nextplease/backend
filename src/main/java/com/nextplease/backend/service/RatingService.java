@@ -34,10 +34,13 @@ public class RatingService {
 
     private final NamedParameterJdbcTemplate jdbcTemplate;
     private final CompanyAccessService companyAccessService;
+    private final ConfigService configService;
 
-    public RatingService(NamedParameterJdbcTemplate jdbcTemplate, CompanyAccessService companyAccessService) {
+    public RatingService(NamedParameterJdbcTemplate jdbcTemplate, CompanyAccessService companyAccessService,
+                         ConfigService configService) {
         this.jdbcTemplate = jdbcTemplate;
         this.companyAccessService = companyAccessService;
+        this.configService = configService;
     }
 
     /** Thông tin đơn cần để kiểm tra quyền + trạng thái. */
@@ -167,10 +170,11 @@ public class RatingService {
                 on conflict (user_id) do nothing
                 """, Map.of("userId", candidateId));
 
+        int rewardNp = configService.getInt("five_star_reward_np", FIVE_STAR_REWARD_NP);
         Map<String, Object> wallet = jdbcTemplate.queryForMap(
                 "select id, np_balance from wallets where user_id = :userId for update",
                 Map.of("userId", candidateId));
-        int newBalance = ((Number) wallet.get("np_balance")).intValue() + FIVE_STAR_REWARD_NP;
+        int newBalance = ((Number) wallet.get("np_balance")).intValue() + rewardNp;
 
         jdbcTemplate.update("update wallets set np_balance = :b, updated_at = now() where id = :id",
                 Map.of("b", newBalance, "id", wallet.get("id")));
@@ -182,13 +186,13 @@ public class RatingService {
                     (:walletId, :amount, :balanceAfter, 'REWARD', 'Thưởng đánh giá 5 sao', :sourceType, :sourceId, :ikey)
                 """, new MapSqlParameterSource()
                 .addValue("walletId", wallet.get("id"))
-                .addValue("amount", FIVE_STAR_REWARD_NP)
+                .addValue("amount", rewardNp)
                 .addValue("balanceAfter", newBalance)
                 .addValue("sourceType", isQuest ? "quest_application" : "application")
                 .addValue("sourceId", sourceId)
                 .addValue("ikey", idemKey));
 
-        log.info("[RatingService] Trao {} NP (5 sao) cho ứng viên {} từ {}", FIVE_STAR_REWARD_NP, candidateId, idemKey);
+        log.info("[RatingService] Trao {} NP (5 sao) cho ứng viên {} từ {}", rewardNp, candidateId, idemKey);
     }
 
     private AppContext loadContext(boolean isQuest, UUID sourceId) {

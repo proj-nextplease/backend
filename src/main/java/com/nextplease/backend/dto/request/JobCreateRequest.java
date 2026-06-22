@@ -23,10 +23,18 @@ public record JobCreateRequest(
         Boolean isRemote,
         @Min(1) Integer capacity,
         OffsetDateTime deadlineAt,
-        @Valid List<SkillRequirement> skills
+        @Valid List<SkillRequirement> skills,
+        @Valid List<FormField> formFields
 ) {
     public record SkillRequirement(
             @NotNull UUID skillId,
             @Size(max = 30) String requiredLevel
+    ) {}
+
+    public record FormField(
+            @NotBlank @Size(max = 200) String label,
+            @Size(max = 20) String fieldType,
+            String options,
+            Boolean required
     ) {}
 }

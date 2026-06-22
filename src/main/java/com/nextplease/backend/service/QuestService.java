@@ -32,15 +32,93 @@ public class QuestService {
     private final ExpService expService;
     private final ReputationService reputationService;
     private final CompanyAccessService companyAccessService;
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+    private final ConfigService configService;
+
+    private static final Map<String, String> EXP_CONFIG_KEY = Map.of(
+            "SMALL_EVENT", "exp_small_event",
+            "SCHOOL_CAMPAIGN", "exp_school_campaign",
+            "COMPANY_PROJECT", "exp_company_project",
+            "SHORT_INTERNSHIP", "exp_short_internship",
+            "FREELANCE_GIG", "exp_freelance_gig"
+    );
 
     public QuestService(NamedParameterJdbcTemplate jdbcTemplate,
                         ExpService expService,
                         ReputationService reputationService,
-                        CompanyAccessService companyAccessService) {
+                        CompanyAccessService companyAccessService,
+                        com.fasterxml.jackson.databind.ObjectMapper objectMapper,
+                        ConfigService configService) {
         this.jdbcTemplate = jdbcTemplate;
         this.expService = expService;
         this.reputationService = reputationService;
         this.companyAccessService = companyAccessService;
+        this.objectMapper = objectMapper;
+        this.configService = configService;
+    }
+
+    private int expForCategory(String category) {
+        int fallback = EXP_BY_CATEGORY.getOrDefault(category, 100);
+        String key = EXP_CONFIG_KEY.get(category);
+        return key != null ? configService.getInt(key, fallback) : fallback;
+    }
+
+    /** Live EXP-per-category (from config) so the create form shows accurate rewards. */
+    public Map<String, Integer> getExpConfig() {
+        Map<String, Integer> m = new java.util.HashMap<>();
+        EXP_CONFIG_KEY.keySet().forEach(cat -> m.put(cat, expForCategory(cat)));
+        return m;
+    }
+
+    // ── Custom form fields helpers ────────────────────────────────────────────
+    List<Map<String, Object>> getQuestFormFields(UUID questId) {
+        return jdbcTemplate.queryForList("""
+                select id, label, field_type as "fieldType", options, required, sort_order as "sortOrder"
+                from quest_form_fields where quest_id = :questId order by sort_order
+                """, Map.of("questId", questId));
+    }
+
+    @SuppressWarnings("unchecked")
+    private void saveQuestFormFields(UUID questId, Object rawFields) {
+        jdbcTemplate.update("delete from quest_form_fields where quest_id = :questId", Map.of("questId", questId));
+        if (!(rawFields instanceof List<?> list)) return;
+        int order = 0;
+        for (Object item : list) {
+            if (!(item instanceof Map<?, ?> m)) continue;
+            Object label = m.get("label");
+            if (label == null || label.toString().isBlank()) continue;
+            Object type = m.get("fieldType");
+            jdbcTemplate.update("""
+                    insert into quest_form_fields (quest_id, label, field_type, options, required, sort_order)
+                    values (:questId, :label, :type, :options, :required, :order)
+                    """, new MapSqlParameterSource()
+                    .addValue("questId", questId)
+                    .addValue("label", label.toString().trim())
+                    .addValue("type", type != null ? type.toString().toUpperCase().trim() : "TEXT")
+                    .addValue("options", m.get("options"))
+                    .addValue("required", Boolean.TRUE.equals(m.get("required")))
+                    .addValue("order", order++));
+        }
+    }
+
+    private String buildQuestCustomAnswers(UUID questId, Map<String, String> answers) {
+        List<Map<String, Object>> fields = jdbcTemplate.queryForList(
+                "select id, label, required from quest_form_fields where quest_id = :questId order by sort_order",
+                Map.of("questId", questId));
+        if (fields.isEmpty()) return null;
+        List<Map<String, String>> out = new java.util.ArrayList<>();
+        for (Map<String, Object> f : fields) {
+            String fieldId = f.get("id").toString();
+            String label = (String) f.get("label");
+            boolean required = Boolean.TRUE.equals(f.get("required"));
+            String val = answers != null ? answers.get(fieldId) : null;
+            if (required && (val == null || val.isBlank())) {
+                throw new AppException(HttpStatus.BAD_REQUEST, "Vui lòng trả lời câu hỏi bắt buộc: " + label);
+            }
+            if (val != null && !val.isBlank()) out.add(Map.of("label", label, "value", val.trim()));
+        }
+        if (out.isEmpty()) return null;
+        try { return objectMapper.writeValueAsString(out); } catch (Exception e) { return null; }
     }
 
     // ── Candidate: Search / Browse ────────────────────────────────────────────
@@ -78,15 +156,19 @@ public class QuestService {
                 order by q.created_at desc
                 limit 50
                 """;
-        return jdbcTemplate.queryForList(sql, new MapSqlParameterSource()
+        List<Map<String, Object>> quests = jdbcTemplate.queryForList(sql, new MapSqlParameterSource()
                 .addValue("category", category)
                 .addValue("keyword", searchPattern));
+        for (Map<String, Object> q : quests) {
+            q.put("formFields", getQuestFormFields((UUID) q.get("id")));
+        }
+        return quests;
     }
 
     // ── Candidate: Apply ──────────────────────────────────────────────────────
 
     @Transactional
-    public Map<String, Object> applyToQuest(UUID userId, UUID questId, String coverNote) {
+    public Map<String, Object> applyToQuest(UUID userId, UUID questId, String coverNote, Map<String, String> answers) {
         // 1. Fetch quest
         Map<String, Object> quest = fetchQuestOrThrow(questId);
 
@@ -129,17 +211,21 @@ public class QuestService {
                     "RS_TOO_LOW");
         }
 
+        // 3b. Validate + snapshot custom answers
+        String customAnswersJson = buildQuestCustomAnswers(questId, answers);
+
         // 4. Insert
         UUID applicationId;
         try {
             applicationId = jdbcTemplate.queryForObject("""
-                    insert into quest_applications (quest_id, candidate_id, status, cover_note)
-                    values (:questId, :userId, 'SUBMITTED', :coverNote)
+                    insert into quest_applications (quest_id, candidate_id, status, cover_note, custom_answers)
+                    values (:questId, :userId, 'SUBMITTED', :coverNote, :answers::jsonb)
                     returning id
                     """, new MapSqlParameterSource()
                     .addValue("questId", questId)
                     .addValue("userId", userId)
-                    .addValue("coverNote", coverNote != null ? coverNote : ""),
+                    .addValue("coverNote", coverNote != null ? coverNote : "")
+                    .addValue("answers", customAnswersJson),
                     UUID.class);
         } catch (DuplicateKeyException e) {
             throw new AppException(HttpStatus.CONFLICT,
@@ -217,7 +303,7 @@ public class QuestService {
         companyAccessService.assertCanManagePostings(organizerUserId, companyId);
 
         String category = (String) request.get("category");
-        int expReward = EXP_BY_CATEGORY.getOrDefault(category, 100);
+        int expReward = expForCategory(category);
         int npReward = request.containsKey("npReward")
                 ? ((Number) request.get("npReward")).intValue() : 0;
         int minReqRs = request.containsKey("minReqRs")
@@ -246,6 +332,8 @@ public class QuestService {
                 .addValue("startsAt", request.get("startsAt"))
                 .addValue("endsAt", request.get("endsAt")),
                 UUID.class);
+
+        saveQuestFormFields(questId, request.get("formFields"));
 
         log.info("[QuestService] Organizer {} created quest {} ({})", organizerUserId, questId, category);
         return Map.of("questId", questId, "status", "PENDING", "expReward", expReward);
@@ -289,6 +377,7 @@ public class QuestService {
                     qa.id,
                     qa.status,
                     qa.cover_note,
+                    qa.custom_answers::text as custom_answers,
                     qa.applied_at as "appliedAt",
                     u.id            as "candidateId",
                     u.display_name  as "candidateName",
@@ -323,7 +412,7 @@ public class QuestService {
         Map<String, Object> qaInfo;
         try {
             qaInfo = jdbcTemplate.queryForMap("""
-                    select qa.id, qa.candidate_id, q.id as quest_id, q.category,
+                    select qa.id, qa.candidate_id, qa.status, q.id as quest_id, q.category,
                            q.exp_reward, q.np_reward
                     from quest_applications qa
                     join quests q on q.id = qa.quest_id
@@ -335,6 +424,13 @@ public class QuestService {
                     """, Map.of("appId", applicationId, "ownerId", organizerUserId));
         } catch (org.springframework.dao.EmptyResultDataAccessException e) {
             throw new AppException(HttpStatus.FORBIDDEN, "Không có quyền cập nhật đơn này.");
+        }
+
+        // Guard: only an ACCEPTED quest application can be marked COMPLETED
+        String currentStatus = (String) qaInfo.get("status");
+        if ("COMPLETED".equals(newStatus) && !"ACCEPTED".equals(currentStatus)) {
+            throw new AppException(HttpStatus.CONFLICT,
+                    "Chỉ có thể đánh dấu hoàn thành khi đơn đang ở trạng thái 'Chấp nhận'.");
         }
 
         jdbcTemplate.update("""
@@ -366,9 +462,12 @@ public class QuestService {
                 awardNp(candidateUserId, npReward, applicationId, qaInfo.get("quest_id").toString());
             }
 
-            // +5 RS for completing a quest
-            reputationService.addReputation(profileId, 5,
-                    "QUEST_COMPLETED", "quest_application", applicationId);
+            // +RS for completing a quest (config-tunable)
+            int rsReward = configService.getInt("rs_quest_completed", 5);
+            if (rsReward > 0) {
+                reputationService.addReputation(profileId, rsReward,
+                        "QUEST_COMPLETED", "quest_application", applicationId);
+            }
 
             log.info("[QuestService] Quest application {} completed → +{} EXP, +{} NP, +5 RS to user {}",
                     applicationId, expReward, npReward, candidateUserId);
@@ -423,13 +522,16 @@ public class QuestService {
     public Map<String, Object> getOrganizerQuestById(UUID userId, UUID questId) {
         verifyQuestOwnership(questId, userId);
         try {
-            return jdbcTemplate.queryForMap("""
+            Map<String, Object> quest = jdbcTemplate.queryForMap("""
                     select id, title, description, category, status, exp_reward as "expReward",
                            min_req_rs as "minReqRs", capacity, ends_at as "endsAt",
                            rejection_reason as "rejectionReason"
                     from quests
                     where id = :questId and deleted_at is null
                     """, Map.of("questId", questId));
+            Map<String, Object> result = new java.util.HashMap<>(quest);
+            result.put("formFields", getQuestFormFields(questId));
+            return result;
         } catch (org.springframework.dao.EmptyResultDataAccessException e) {
             throw new ResourceNotFoundException("Không tìm thấy Quest này.");
         }
@@ -462,6 +564,10 @@ public class QuestService {
                 .addValue("capacity",    request.get("capacity"))
                 .addValue("endsAt",      request.get("endsAt"))
                 .addValue("questId",     questId));
+
+        if (request.containsKey("formFields")) {
+            saveQuestFormFields(questId, request.get("formFields"));
+        }
     }
 
     // ── Organizer: Close Quest ────────────────────────────────────────────────
