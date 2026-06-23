@@ -34,6 +34,7 @@ public class QuestService {
     private final CompanyAccessService companyAccessService;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
     private final ConfigService configService;
+    private final NotificationService notificationService;
 
     private static final Map<String, String> EXP_CONFIG_KEY = Map.of(
             "SMALL_EVENT", "exp_small_event",
@@ -48,13 +49,15 @@ public class QuestService {
                         ReputationService reputationService,
                         CompanyAccessService companyAccessService,
                         com.fasterxml.jackson.databind.ObjectMapper objectMapper,
-                        ConfigService configService) {
+                        ConfigService configService,
+                        NotificationService notificationService) {
         this.jdbcTemplate = jdbcTemplate;
         this.expService = expService;
         this.reputationService = reputationService;
         this.companyAccessService = companyAccessService;
         this.objectMapper = objectMapper;
         this.configService = configService;
+        this.notificationService = notificationService;
     }
 
     private int expForCategory(String category) {
@@ -235,6 +238,15 @@ public class QuestService {
         }
 
         log.info("[QuestService] User {} applied to quest {} → qa {}", userId, questId, applicationId);
+
+        Object ownerId = quest.get("created_by");
+        if (ownerId instanceof UUID owner) {
+            notificationService.notify(owner, "NEW_APPLICATION",
+                    "Có người tham gia Quest",
+                    "Một ứng viên vừa đăng ký tham gia \"" + quest.get("title") + "\".",
+                    "/businesses/dashboard");
+        }
+
         return Map.of("applicationId", applicationId, "questId", questId, "status", "SUBMITTED");
     }
 
@@ -341,6 +353,12 @@ public class QuestService {
         saveQuestFormFields(questId, request.get("formFields"));
 
         log.info("[QuestService] Organizer {} created quest {} ({})", organizerUserId, questId, category);
+
+        notificationService.notifyAdmins("POST_PENDING",
+                "Quest mới chờ duyệt",
+                "Quest \"" + request.get("title") + "\" vừa được tạo và đang chờ duyệt.",
+                "/nextplease-admin-portal/b2b-reviews");
+
         return Map.of("questId", questId, "status", "PENDING", "expReward", expReward);
     }
 
@@ -418,7 +436,7 @@ public class QuestService {
         try {
             qaInfo = jdbcTemplate.queryForMap("""
                     select qa.id, qa.candidate_id, qa.status, q.id as quest_id, q.category,
-                           q.exp_reward, q.np_reward
+                           q.exp_reward, q.np_reward, q.title as quest_title
                     from quest_applications qa
                     join quests q on q.id = qa.quest_id
                     join companies c on c.id = q.company_id
@@ -479,6 +497,24 @@ public class QuestService {
         }
 
         log.info("[QuestService] Organizer {} updated qa {} → {}", organizerUserId, applicationId, newStatus);
+
+        // Notify the candidate about the status change.
+        UUID candidateUserId = (UUID) qaInfo.get("candidate_id");
+        String questTitle = (String) qaInfo.get("quest_title");
+        UUID questId = (UUID) qaInfo.get("quest_id");
+        String statusLabel = switch (newStatus) {
+            case "ACCEPTED" -> "đã được chấp nhận 🎉";
+            case "REJECTED" -> "đã bị từ chối";
+            case "COMPLETED" -> "đã hoàn thành — bạn được cộng EXP/NP!";
+            default -> "đã được cập nhật";
+        };
+        boolean emailWorthy = newStatus.equals("ACCEPTED") || newStatus.equals("REJECTED") || newStatus.equals("COMPLETED");
+        notificationService.notify(candidateUserId, "QUEST_STATUS",
+                "Cập nhật tham gia Quest",
+                "Đơn tham gia Quest \"" + questTitle + "\" của bạn " + statusLabel
+                        + ("REJECTED".equals(newStatus) && rejectReason != null && !rejectReason.isBlank() ? " (Lý do: " + rejectReason + ")" : ""),
+                questId != null ? "/quests/" + questId : null,
+                emailWorthy);
     }
 
     // ── private helpers ───────────────────────────────────────────────────────
@@ -486,7 +522,7 @@ public class QuestService {
     private Map<String, Object> fetchQuestOrThrow(UUID questId) {
         try {
             return jdbcTemplate.queryForMap("""
-                    select id, title, status, category, min_req_rs, capacity, exp_reward, np_reward, company_id, ends_at
+                    select id, title, status, category, min_req_rs, capacity, exp_reward, np_reward, company_id, ends_at, created_by
                     from quests where id = :id and deleted_at is null
                     """, Map.of("id", questId));
         } catch (org.springframework.dao.EmptyResultDataAccessException e) {

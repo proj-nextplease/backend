@@ -524,21 +524,40 @@ public class ProfileService {
         }
     }
 
+    /**
+     * Upsert experiences for a profile WITHOUT disturbing already-reviewed rows.
+     *
+     * Why not delete-all + re-insert: experiences are the source of awarded EXP/RS
+     * (idempotency is keyed on the row id). Re-creating rows with new ids on every
+     * portfolio save (incl. draft autosave) would (a) reset APPROVED rows to PENDING,
+     * (b) let the same achievement be re-approved → double-count EXP/RS, and
+     * (c) wipe experiences submitted via the separate Credential form. So:
+     *   - existing row (id is a known UUID) → UPDATE content only; never touch
+     *     verification_status / verified_by / points.
+     *   - new row → INSERT as PENDING.
+     *   - removed row → DELETE only if still PENDING; reviewed rows are kept so
+     *     awarded points/history stay consistent.
+     */
     private void updateExperiences(UUID profileId, List<ExperienceDto> experiences) {
-        // Delete all old experiences first to avoid mismatch
-        jdbcTemplate.update("delete from experiences where profile_id = :profileId", Map.of("profileId", profileId));
-
-        if (experiences == null || experiences.isEmpty()) {
-            return;
+        java.util.List<Map<String, Object>> existingRows = jdbcTemplate.queryForList(
+                "select id, verification_status from experiences where profile_id = :profileId",
+                Map.of("profileId", profileId));
+        Map<UUID, String> existingStatus = new HashMap<>();
+        for (Map<String, Object> row : existingRows) {
+            existingStatus.put((UUID) row.get("id"), (String) row.get("verification_status"));
         }
 
-        for (ExperienceDto exp : experiences) {
+        java.util.Set<UUID> keptIds = new java.util.HashSet<>();
+        java.util.List<ExperienceDto> list = experiences == null ? java.util.List.of() : experiences;
+
+        for (ExperienceDto exp : list) {
             if ((exp.title() == null || exp.title().trim().isEmpty()) &&
                 (exp.organization() == null || exp.organization().trim().isEmpty())) {
                 continue; // Skip empty records
             }
             LocalDate startDate = parseMmYy(exp.startDate());
             LocalDate endDate = parseMmYy(exp.endDate());
+            UUID existingId = tryParseUuid(exp.id());
 
             MapSqlParameterSource params = new MapSqlParameterSource()
                     .addValue("profileId", profileId)
@@ -549,10 +568,43 @@ public class ProfileService {
                     .addValue("endDate", endDate != null ? java.sql.Date.valueOf(endDate) : null)
                     .addValue("proofImages", serializeImages(exp.proofImages()));
 
-            jdbcTemplate.update("""
-                    insert into experiences (id, profile_id, project_name, position, category, description, started_at, ended_at, proof_images, verification_status, created_at, updated_at)
-                    values (gen_random_uuid(), :profileId, :organization, :title, 'COMPANY_PROJECT', :description, :startDate, :endDate, cast(:proofImages as jsonb), 'PENDING', now(), now())
-                    """, params);
+            if (existingId != null && existingStatus.containsKey(existingId)) {
+                // Update content only — status/points untouched (no re-award).
+                keptIds.add(existingId);
+                jdbcTemplate.update("""
+                        update experiences set
+                            project_name = :organization,
+                            position     = :title,
+                            description  = :description,
+                            started_at   = :startDate,
+                            ended_at     = :endDate,
+                            proof_images = cast(:proofImages as jsonb),
+                            updated_at   = now()
+                        where id = :id
+                        """, params.addValue("id", existingId));
+            } else {
+                jdbcTemplate.update("""
+                        insert into experiences (id, profile_id, project_name, position, category, description, started_at, ended_at, proof_images, verification_status, created_at, updated_at)
+                        values (gen_random_uuid(), :profileId, :organization, :title, 'COMPANY_PROJECT', :description, :startDate, :endDate, cast(:proofImages as jsonb), 'PENDING', now(), now())
+                        """, params);
+            }
+        }
+
+        // Delete only PENDING rows the user actually removed. Reviewed (APPROVED/
+        // REJECTED) rows are preserved to keep awarded points & history consistent.
+        for (Map.Entry<UUID, String> e : existingStatus.entrySet()) {
+            if (!keptIds.contains(e.getKey()) && "PENDING".equals(e.getValue())) {
+                jdbcTemplate.update("delete from experiences where id = :id", Map.of("id", e.getKey()));
+            }
+        }
+    }
+
+    private UUID tryParseUuid(String value) {
+        if (value == null || value.isBlank()) return null;
+        try {
+            return UUID.fromString(value.trim());
+        } catch (IllegalArgumentException e) {
+            return null; // FE-generated numeric ids for brand-new rows → treat as insert
         }
     }
 

@@ -35,14 +35,17 @@ public class ApplicationService {
     private final ExpService expService;
     private final ReputationService reputationService;
     private final ConfigService configService;
+    private final NotificationService notificationService;
 
     public ApplicationService(NamedParameterJdbcTemplate jdbcTemplate, ObjectMapper objectMapper,
-                              ExpService expService, ReputationService reputationService, ConfigService configService) {
+                              ExpService expService, ReputationService reputationService, ConfigService configService,
+                              NotificationService notificationService) {
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
         this.expService = expService;
         this.reputationService = reputationService;
         this.configService = configService;
+        this.notificationService = notificationService;
     }
 
     /**
@@ -129,6 +132,15 @@ public class ApplicationService {
 
         log.info("[ApplicationService] User {} applied to job {} → application {}", userId, jobId, applicationId);
 
+        // Notify the post owner that a new candidate applied.
+        Object ownerId = job.get("created_by");
+        if (ownerId instanceof UUID owner) {
+            notificationService.notify(owner, "NEW_APPLICATION",
+                    "Có ứng viên mới",
+                    "Một ứng viên vừa ứng tuyển vào \"" + job.get("title") + "\".",
+                    "/businesses/dashboard");
+        }
+
         return Map.of(
                 "applicationId", applicationId,
                 "jobId", jobId,
@@ -196,7 +208,7 @@ public class ApplicationService {
         Map<String, Object> appInfo;
         try {
             appInfo = jdbcTemplate.queryForMap("""
-                    select a.id, a.candidate_id, a.status, j.job_type from applications a
+                    select a.id, a.candidate_id, a.status, a.job_id, j.job_type, j.title as job_title from applications a
                     join jobs j on j.id = a.job_id
                     join companies c on c.id = j.company_id
                     where a.id = :appId
@@ -247,6 +259,26 @@ public class ApplicationService {
         }
 
         log.info("[ApplicationService] Organizer {} updated application {} → {}", organizerUserId, applicationId, newStatus);
+
+        // Notify the candidate about the status change.
+        UUID candidateUserId = (UUID) appInfo.get("candidate_id");
+        String jobTitle = (String) appInfo.get("job_title");
+        UUID jobId = (UUID) appInfo.get("job_id");
+        String statusLabel = switch (newStatus) {
+            case "VIEWED" -> "đã được xem";
+            case "SHORTLISTED" -> "đã vào danh sách tiềm năng";
+            case "ACCEPTED" -> "đã được chấp nhận 🎉";
+            case "REJECTED" -> "đã bị từ chối";
+            case "COMPLETED" -> "đã hoàn thành — bạn được cộng điểm!";
+            default -> "đã được cập nhật";
+        };
+        boolean emailWorthy = newStatus.equals("ACCEPTED") || newStatus.equals("REJECTED") || newStatus.equals("COMPLETED");
+        notificationService.notify(candidateUserId, "APPLICATION_STATUS",
+                "Cập nhật đơn ứng tuyển",
+                "Đơn ứng tuyển \"" + jobTitle + "\" của bạn " + statusLabel
+                        + ("REJECTED".equals(newStatus) && rejectReason != null && !rejectReason.isBlank() ? " (Lý do: " + rejectReason + ")" : ""),
+                jobId != null ? "/jobs/" + jobId : null,
+                emailWorthy);
     }
 
     /** Returns all applications for the given candidate, newest first. */
@@ -314,7 +346,7 @@ public class ApplicationService {
     private Map<String, Object> fetchJobOrThrow(UUID jobId) {
         try {
             return jdbcTemplate.queryForMap("""
-                    select id, title, status, min_req_rs, requires_premium, company_id, deadline_at
+                    select id, title, status, min_req_rs, requires_premium, company_id, deadline_at, created_by
                     from jobs
                     where id = :id and deleted_at is null
                     """, Map.of("id", jobId));
