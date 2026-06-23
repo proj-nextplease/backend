@@ -208,7 +208,7 @@ public class ApplicationService {
         Map<String, Object> appInfo;
         try {
             appInfo = jdbcTemplate.queryForMap("""
-                    select a.id, a.candidate_id, a.status, a.job_id, j.job_type, j.title as job_title from applications a
+                    select a.id, a.candidate_id, a.status, a.job_id, j.job_type, j.title as job_title, j.capacity from applications a
                     join jobs j on j.id = a.job_id
                     join companies c on c.id = j.company_id
                     where a.id = :appId
@@ -225,6 +225,25 @@ public class ApplicationService {
         if ("COMPLETED".equals(newStatus) && !"ACCEPTED".equals(currentStatus)) {
             throw new AppException(HttpStatus.CONFLICT,
                     "Chỉ có thể đánh dấu hoàn thành khi đơn đang ở trạng thái 'Chấp nhận'.");
+        }
+
+        // Capacity guard: when accepting a NEW candidate (transitioning into ACCEPTED),
+        // block if the job already reached its quota. capacity null/<=0 => unlimited.
+        if ("ACCEPTED".equals(newStatus) && !"ACCEPTED".equals(currentStatus)) {
+            Object capRaw = appInfo.get("capacity");
+            if (capRaw != null) {
+                int capacity = ((Number) capRaw).intValue();
+                if (capacity > 0) {
+                    Integer accepted = jdbcTemplate.queryForObject("""
+                            select count(*) from applications
+                            where job_id = :jobId and status = 'ACCEPTED'
+                            """, Map.of("jobId", appInfo.get("job_id")), Integer.class);
+                    if (accepted != null && accepted >= capacity) {
+                        throw new AppException(HttpStatus.CONFLICT,
+                                String.format("Tin này đã đủ chỉ tiêu (%d/%d). Không thể nhận thêm ứng viên.", accepted, capacity));
+                    }
+                }
+            }
         }
 
         jdbcTemplate.update("""
