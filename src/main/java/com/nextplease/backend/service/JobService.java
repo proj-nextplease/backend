@@ -23,10 +23,13 @@ public class JobService {
 
     private final NamedParameterJdbcTemplate jdbcTemplate;
     private final CompanyAccessService companyAccessService;
+    private final ConfigService configService;
 
-    public JobService(NamedParameterJdbcTemplate jdbcTemplate, CompanyAccessService companyAccessService) {
+    public JobService(NamedParameterJdbcTemplate jdbcTemplate, CompanyAccessService companyAccessService,
+                      ConfigService configService) {
         this.jdbcTemplate = jdbcTemplate;
         this.companyAccessService = companyAccessService;
+        this.configService = configService;
     }
 
     /**
@@ -66,9 +69,10 @@ public class JobService {
                           and status != 'REJECTED'
                         """, Map.of("companyId", companyId), Integer.class);
 
-                if (currentMonthPostings != null && currentMonthPostings >= 3) {
+                int quota = configService.getInt("free_jd_quota_monthly", 3);
+                if (currentMonthPostings != null && currentMonthPostings >= quota) {
                     throw new AppException(HttpStatus.BAD_REQUEST,
-                            "Tài khoản miễn phí tối đa đăng 3 tin tuyển dụng trong tháng. Vui lòng nâng cấp Premium để không bị giới hạn.");
+                            String.format("Tài khoản miễn phí tối đa đăng %d tin tuyển dụng trong tháng. Vui lòng nâng cấp Premium để không bị giới hạn.", quota));
                 }
             }
         }
@@ -79,15 +83,17 @@ public class JobService {
                 insert into jobs (
                     id, company_id, title, description, job_type, category, specialty,
                     compensation, min_req_rs, location, is_remote, capacity,
-                    deadline_at, status, created_by, created_at, updated_at
+                    deadline_at, banner_url, banner_pos, status, created_by, created_at, updated_at
                 )
                 values (
                     :id, :companyId, :title, :description, :jobType, :category, :specialty,
                     :compensation, :minReqRs, :location, :isRemote, :capacity,
-                    :deadlineAt, 'PENDING', :userId, now(), now()
+                    :deadlineAt, :bannerUrl, :bannerPos, 'PENDING', :userId, now(), now()
                 )
 
                 """, new MapSqlParameterSource()
+                .addValue("bannerUrl", request.bannerUrl())
+                .addValue("bannerPos", request.bannerPos())
                 .addValue("id", jobId)
                 .addValue("companyId", companyId)
                 .addValue("title", request.title().trim())
@@ -165,10 +171,14 @@ public class JobService {
                     is_remote = :isRemote,
                     capacity = :capacity,
                     deadline_at = :deadlineAt,
+                    banner_url = :bannerUrl,
+                    banner_pos = :bannerPos,
                     status = :status,
                     updated_at = now()
                 where id = :jobId
                 """, new MapSqlParameterSource()
+                .addValue("bannerUrl", request.bannerUrl())
+                .addValue("bannerPos", request.bannerPos())
                 .addValue("status", newStatus)
                 .addValue("jobId", jobId)
                 .addValue("title", request.title().trim())
@@ -321,10 +331,24 @@ public class JobService {
 
     public Map<String, Object> getJobDetails(UUID jobId) {
         Map<String, Object> job = getJobDetailsRaw(jobId);
-        List<Map<String, Object>> skills = getJobSkills(jobId);
-        job.put("skills", skills);
-        job.put("formFields", getJobFormFields(jobId));
+        boolean isQuest = Boolean.TRUE.equals(job.get("isQuest")) || "QUEST".equals(job.get("postType"));
+        if (isQuest) {
+            // Quests have no skill requirements; their custom questions live in
+            // quest_form_fields (not job_form_fields).
+            job.put("skills", java.util.List.of());
+            job.put("formFields", getQuestFormFieldsRaw(jobId));
+        } else {
+            job.put("skills", getJobSkills(jobId));
+            job.put("formFields", getJobFormFields(jobId));
+        }
         return job;
+    }
+
+    private List<Map<String, Object>> getQuestFormFieldsRaw(UUID questId) {
+        return jdbcTemplate.queryForList("""
+                select id, label, field_type as "fieldType", options, required, sort_order as "sortOrder"
+                from quest_form_fields where quest_id = :questId order by sort_order
+                """, Map.of("questId", questId));
     }
 
     private Map<String, Object> getJobDetailsRaw(UUID jobId) {
@@ -343,6 +367,8 @@ public class JobService {
                            j.is_remote as "isRemote",
                            j.capacity,
                            j.deadline_at as "deadlineAt",
+                           j.banner_url as "bannerUrl",
+                           j.banner_pos as "bannerPos",
                            j.status,
                            j.rejection_reason as "rejectionReason",
                            j.created_by,
@@ -366,11 +392,14 @@ public class JobService {
                                'OTHER' as "specialty",
                                null as "compensation",
                                q.exp_reward as "expReward",
+                               q.np_reward as "npReward",
                                q.min_req_rs as "minReqRs",
                                'FPTU HCM' as "location",
                                false as "isRemote",
                                q.capacity,
                                q.ends_at as "deadlineAt",
+                               q.banner_url as "bannerUrl",
+                               q.banner_pos as "bannerPos",
                                q.status,
                                q.rejection_reason as "rejectionReason",
                                q.created_by,
@@ -436,7 +465,8 @@ public class JobService {
             Map<String, Object> job = jdbcTemplate.queryForMap("""
                     select id, title, description, job_type as "jobType", category, specialty,
                            compensation, min_req_rs as "minReqRs", location, is_remote as "isRemote",
-                           capacity, deadline_at as "deadlineAt", status, rejection_reason as "rejectionReason"
+                           capacity, deadline_at as "deadlineAt", banner_url as "bannerUrl", banner_pos as "bannerPos",
+                           status, rejection_reason as "rejectionReason"
                     from jobs
                     where id = :jobId and company_id = :companyId
                     """, Map.of("jobId", jobId, "companyId", companyId));

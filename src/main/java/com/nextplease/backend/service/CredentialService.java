@@ -46,15 +46,18 @@ public class CredentialService {
     private final NamedParameterJdbcTemplate jdbcTemplate;
     private final ReputationService reputationService;
     private final ExpService expService;
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
 
     public CredentialService(
             NamedParameterJdbcTemplate jdbcTemplate,
             ReputationService reputationService,
-            ExpService expService
+            ExpService expService,
+            com.fasterxml.jackson.databind.ObjectMapper objectMapper
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.reputationService = reputationService;
         this.expService = expService;
+        this.objectMapper = objectMapper;
     }
 
     /** Candidate submits a proof-of-work experience for review. */
@@ -69,11 +72,11 @@ public class CredentialService {
         UUID expId = jdbcTemplate.queryForObject("""
                 insert into experiences (
                     profile_id, project_name, position, category, role_level,
-                    description, proof_link, started_at, ended_at,
+                    description, proof_link, proof_images, started_at, ended_at,
                     verification_status, created_at, updated_at
                 ) values (
                     :profileId, :projectName, :position, :category, :roleLevel,
-                    :description, :proofLink,
+                    :description, :proofLink, :proofImages::jsonb,
                     cast(:startedAt as date), cast(:endedAt as date),
                     'PENDING', now(), now()
                 )
@@ -86,6 +89,7 @@ public class CredentialService {
                 .addValue("roleLevel", req.roleLevel())
                 .addValue("description", req.description())
                 .addValue("proofLink", req.proofLink())
+                .addValue("proofImages", serializeImages(req.proofImages()))
                 .addValue("startedAt", toFirstOfMonth(req.startedAt()))
                 .addValue("endedAt", toFirstOfMonth(req.endedAt())),
                 UUID.class);
@@ -101,7 +105,7 @@ public class CredentialService {
         UUID profileId = getProfileIdOrThrow(userId);
         return jdbcTemplate.queryForList("""
                 select id, project_name, position, category, role_level,
-                       description, proof_link, verification_status,
+                       description, proof_link, proof_images::text as proof_images, verification_status,
                        reject_reason, started_at, ended_at, created_at
                 from experiences
                 where profile_id = :profileId
@@ -184,6 +188,7 @@ public class CredentialService {
                        e.role_level,
                        e.description,
                        e.proof_link,
+                       e.proof_images::text as proof_images,
                        e.verification_status,
                        e.started_at,
                        e.ended_at,
@@ -308,7 +313,18 @@ public class CredentialService {
             String roleLevel,
             String description,
             String proofLink,
+            java.util.List<String> proofImages,
             String startedAt,
             String endedAt
     ) {}
+
+    private String serializeImages(java.util.List<String> images) {
+        if (images == null || images.isEmpty()) return null;
+        java.util.List<String> clean = images.stream()
+                .filter(s -> s != null && !s.isBlank())
+                .limit(6)
+                .toList();
+        if (clean.isEmpty()) return null;
+        try { return objectMapper.writeValueAsString(clean); } catch (Exception e) { return null; }
+    }
 }

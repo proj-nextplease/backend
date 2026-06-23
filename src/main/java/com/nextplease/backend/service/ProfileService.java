@@ -224,7 +224,7 @@ public class ProfileService {
 
         // 6. Get experiences
         List<ExperienceDto> experiences = jdbcTemplate.query("""
-                select id, project_name, position, description, started_at, ended_at from experiences
+                select id, project_name, position, description, started_at, ended_at, proof_images::text as proof_images from experiences
                 where profile_id = :profileId
                 order by created_at asc
                 """, Map.of("profileId", profileId), (rs, rowNum) -> new ExperienceDto(
@@ -233,7 +233,8 @@ public class ProfileService {
                         rs.getString("project_name"),
                         rs.getString("description"),
                         formatMmYy(rs.getDate("started_at")),
-                        formatMmYy(rs.getDate("ended_at"))
+                        formatMmYy(rs.getDate("ended_at")),
+                        deserializeImages(rs.getString("proof_images"))
                 ));
 
         boolean onboardingCompleted = profile.get("onboarding_completed") != null && (Boolean) profile.get("onboarding_completed");
@@ -312,7 +313,7 @@ public class ProfileService {
                 """, Map.of("profileId", profileId), (rs, rowNum) -> rs.getString("name"));
 
         List<ExperienceDto> experiences = jdbcTemplate.query("""
-                select id, project_name, position, description, started_at, ended_at from experiences
+                select id, project_name, position, description, started_at, ended_at, proof_images::text as proof_images from experiences
                 where profile_id = :profileId
                 order by created_at asc
                 """, Map.of("profileId", profileId), (rs, rowNum) -> new ExperienceDto(
@@ -321,7 +322,8 @@ public class ProfileService {
                         rs.getString("project_name"),
                         rs.getString("description"),
                         formatMmYy(rs.getDate("started_at")),
-                        formatMmYy(rs.getDate("ended_at"))
+                        formatMmYy(rs.getDate("ended_at")),
+                        deserializeImages(rs.getString("proof_images"))
                 ));
 
         boolean onboardingCompleted = Boolean.TRUE.equals(profile.get("onboarding_completed"));
@@ -544,11 +546,12 @@ public class ProfileService {
                     .addValue("title", exp.title() == null ? "" : exp.title().trim())
                     .addValue("description", exp.detail() == null ? "" : exp.detail().trim())
                     .addValue("startDate", startDate != null ? java.sql.Date.valueOf(startDate) : null)
-                    .addValue("endDate", endDate != null ? java.sql.Date.valueOf(endDate) : null);
+                    .addValue("endDate", endDate != null ? java.sql.Date.valueOf(endDate) : null)
+                    .addValue("proofImages", serializeImages(exp.proofImages()));
 
             jdbcTemplate.update("""
-                    insert into experiences (id, profile_id, project_name, position, category, description, started_at, ended_at, verification_status, created_at, updated_at)
-                    values (gen_random_uuid(), :profileId, :organization, :title, 'COMPANY_PROJECT', :description, :startDate, :endDate, 'PENDING', now(), now())
+                    insert into experiences (id, profile_id, project_name, position, category, description, started_at, ended_at, proof_images, verification_status, created_at, updated_at)
+                    values (gen_random_uuid(), :profileId, :organization, :title, 'COMPANY_PROJECT', :description, :startDate, :endDate, cast(:proofImages as jsonb), 'PENDING', now(), now())
                     """, params);
         }
     }
@@ -580,6 +583,27 @@ public class ProfileService {
         }
         LocalDate localDate = date.toLocalDate();
         return String.format("%02d/%02d", localDate.getMonthValue(), localDate.getYear() % 100);
+    }
+
+    // Proof images: clamp to 6 non-blank entries, store as a jsonb array string (null if none).
+    private String serializeImages(java.util.List<String> images) {
+        if (images == null || images.isEmpty()) return null;
+        java.util.List<String> clean = images.stream().filter(s -> s != null && !s.isBlank()).limit(6).toList();
+        if (clean.isEmpty()) return null;
+        try {
+            return objectMapper.writeValueAsString(clean);
+        } catch (JsonProcessingException e) {
+            return null;
+        }
+    }
+
+    private java.util.List<String> deserializeImages(String json) {
+        if (json == null || json.isBlank()) return java.util.List.of();
+        try {
+            return objectMapper.readValue(json, new com.fasterxml.jackson.core.type.TypeReference<java.util.List<String>>() {});
+        } catch (Exception e) {
+            return java.util.List.of();
+        }
     }
 
     private String serializeJson(Object value) {
