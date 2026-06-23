@@ -26,16 +26,20 @@ public class B2bRegistrationService {
     private final AppUserRepository appUserRepository;
     private final CompanyAccessService companyAccessService;
 
+    private final NotificationService notificationService;
+
     public B2bRegistrationService(
             NamedParameterJdbcTemplate jdbcTemplate,
             SupabaseAdminService supabaseAdminService,
             AppUserRepository appUserRepository,
-            CompanyAccessService companyAccessService
+            CompanyAccessService companyAccessService,
+            NotificationService notificationService
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.supabaseAdminService = supabaseAdminService;
         this.appUserRepository = appUserRepository;
         this.companyAccessService = companyAccessService;
+        this.notificationService = notificationService;
     }
 
     @Transactional
@@ -234,6 +238,11 @@ public class B2bRegistrationService {
             ));
 
             log.info("B2B User registration completed successfully for email: {} (company: {})", normalizedEmail, request.companyName());
+
+            notificationService.notifyAdmins("B2B_PENDING",
+                    "Hồ sơ tổ chức mới chờ duyệt",
+                    "\"" + request.companyName().trim() + "\" vừa đăng ký và đang chờ duyệt.",
+                    "/nextplease-admin-portal/b2b-reviews");
 
         } catch (Exception e) {
             if (supabaseUserId != null) {

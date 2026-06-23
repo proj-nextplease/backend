@@ -37,17 +37,40 @@ public class AdminDashboardController {
     private final NamedParameterJdbcTemplate jdbcTemplate;
     private final com.nextplease.backend.service.CredentialService credentialService;
     private final com.nextplease.backend.service.SupabaseAdminService supabaseAdminService;
+    private final com.nextplease.backend.service.NotificationService notificationService;
 
     public AdminDashboardController(
             CurrentUserService currentUserService,
             NamedParameterJdbcTemplate jdbcTemplate,
             com.nextplease.backend.service.CredentialService credentialService,
-            com.nextplease.backend.service.SupabaseAdminService supabaseAdminService
+            com.nextplease.backend.service.SupabaseAdminService supabaseAdminService,
+            com.nextplease.backend.service.NotificationService notificationService
     ) {
         this.currentUserService = currentUserService;
         this.jdbcTemplate = jdbcTemplate;
         this.credentialService = credentialService;
         this.supabaseAdminService = supabaseAdminService;
+        this.notificationService = notificationService;
+    }
+
+    /** Notify the post owner about an admin moderation decision (fail-soft). */
+    private void notifyPostOwner(String table, java.util.UUID postId, boolean approved, String reason) {
+        try {
+            Map<String, Object> row = jdbcTemplate.queryForMap(
+                    "select created_by, title from " + table + " where id = :id", Map.of("id", postId));
+            Object owner = row.get("created_by");
+            if (!(owner instanceof java.util.UUID ownerId)) return;
+            String title = (String) row.get("title");
+            boolean isQuest = "quests".equals(table);
+            String label = isQuest ? "Quest" : "Tin tuyển dụng";
+            notificationService.notify(ownerId, "POST_MODERATION",
+                    approved ? label + " đã được duyệt ✅" : label + " bị từ chối",
+                    "\"" + title + "\" " + (approved ? "đã được duyệt và hiển thị công khai."
+                            : "đã bị từ chối." + (reason != null && !reason.isBlank() ? " Lý do: " + reason : "")),
+                    "/businesses/dashboard", true);
+        } catch (Exception e) {
+            log.warn("Failed to notify post owner for {} {}: {}", table, postId, e.getMessage());
+        }
     }
 
     /**
@@ -287,6 +310,7 @@ public class AdminDashboardController {
                 log.warn("Failed to write quest approval audit log: {}", e.getMessage());
             }
 
+            notifyPostOwner("quests", id, true, null);
             return ApiResponse.success("Đã duyệt quest thành công!");
         }
 
@@ -302,6 +326,7 @@ public class AdminDashboardController {
             log.warn("Failed to write job approval audit log: {}", e.getMessage());
         }
 
+        notifyPostOwner("jobs", id, true, null);
         return ApiResponse.success("Đã duyệt tin tuyển dụng thành công!");
     }
 
@@ -346,6 +371,7 @@ public class AdminDashboardController {
                 log.warn("Failed to write quest rejection audit log: {}", e.getMessage());
             }
 
+            notifyPostOwner("quests", id, false, reason);
             return ApiResponse.success("Đã từ chối quest!");
         }
 
@@ -362,6 +388,7 @@ public class AdminDashboardController {
             log.warn("Failed to write job rejection audit log: {}", e.getMessage());
         }
 
+        notifyPostOwner("jobs", id, false, reason);
         return ApiResponse.success("Đã từ chối tin tuyển dụng!");
     }
 

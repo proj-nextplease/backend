@@ -47,17 +47,30 @@ public class CredentialService {
     private final ReputationService reputationService;
     private final ExpService expService;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+    private final NotificationService notificationService;
 
     public CredentialService(
             NamedParameterJdbcTemplate jdbcTemplate,
             ReputationService reputationService,
             ExpService expService,
-            com.fasterxml.jackson.databind.ObjectMapper objectMapper
+            com.fasterxml.jackson.databind.ObjectMapper objectMapper,
+            NotificationService notificationService
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.reputationService = reputationService;
         this.expService = expService;
         this.objectMapper = objectMapper;
+        this.notificationService = notificationService;
+    }
+
+    /** Resolve the app_users id that owns a profile (notification recipient). */
+    private UUID profileOwnerUserId(UUID profileId) {
+        try {
+            return jdbcTemplate.queryForObject(
+                    "select user_id from profiles where id = :id", Map.of("id", profileId), UUID.class);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /** Candidate submits a proof-of-work experience for review. */
@@ -96,6 +109,11 @@ public class CredentialService {
 
         log.info("[CredentialService] User {} submitted credential, experienceId={}, category={}, role={}",
                 userId, expId, req.category(), req.roleLevel());
+
+        notificationService.notifyAdmins("EXPERIENCE_PENDING",
+                "Minh chứng mới chờ xác thực",
+                "Có kinh nghiệm \"" + req.position() + "\" vừa được nộp vào hàng chờ xác thực.",
+                "/nextplease-admin-portal/b2b-reviews");
 
         return Map.of("experienceId", expId, "status", "PENDING");
     }
@@ -150,6 +168,11 @@ public class CredentialService {
 
         log.info("[CredentialService] Admin {} approved experience {} → +{} EXP, +{} RS, profile {}",
                 adminUserId, experienceId, expPoints, rsPoints, profileId);
+
+        notificationService.notify(profileOwnerUserId(profileId), "EXPERIENCE_APPROVED",
+                "Kinh nghiệm đã được xác thực ✅",
+                "Kinh nghiệm \"" + exp.get("position") + "\" của bạn đã được duyệt: +" + expPoints + " EXP, +" + rsPoints + " RS.",
+                "/portfolio", true);
     }
 
     /** Admin rejects an experience. */
@@ -176,6 +199,11 @@ public class CredentialService {
 
         log.info("[CredentialService] Admin {} rejected experience {} reason={}",
                 adminUserId, experienceId, reason);
+
+        notificationService.notify(profileOwnerUserId((UUID) exp.get("profile_id")), "EXPERIENCE_REJECTED",
+                "Kinh nghiệm chưa được duyệt",
+                "Kinh nghiệm \"" + exp.get("position") + "\" của bạn bị từ chối. Lý do: " + reason,
+                "/portfolio", true);
     }
 
     /** Admin fetch: all PENDING experiences across all users (newest first). */

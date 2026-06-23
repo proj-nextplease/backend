@@ -24,12 +24,14 @@ public class JobService {
     private final NamedParameterJdbcTemplate jdbcTemplate;
     private final CompanyAccessService companyAccessService;
     private final ConfigService configService;
+    private final NotificationService notificationService;
 
     public JobService(NamedParameterJdbcTemplate jdbcTemplate, CompanyAccessService companyAccessService,
-                      ConfigService configService) {
+                      ConfigService configService, NotificationService notificationService) {
         this.jdbcTemplate = jdbcTemplate;
         this.companyAccessService = companyAccessService;
         this.configService = configService;
+        this.notificationService = notificationService;
     }
 
     /**
@@ -134,6 +136,12 @@ public class JobService {
                 """, Map.of("userId", userId, "jobId", jobId, "title", request.title()));
 
         log.info("Job successfully created with ID: {}", jobId);
+
+        notificationService.notifyAdmins("POST_PENDING",
+                "Tin tuyển dụng mới chờ duyệt",
+                "Tin \"" + request.title() + "\" vừa được đăng và đang chờ duyệt.",
+                "/nextplease-admin-portal/b2b-reviews");
+
         return jobId;
     }
 

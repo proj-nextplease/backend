@@ -180,6 +180,68 @@ public class EmailDeliveryService {
         }
     }
 
+    /**
+     * Generic notification email (mirrors an in-app notification). Fail-soft:
+     * never throws, so a mail failure can't break the triggering transaction.
+     * optionalLink, when present, renders a button.
+     */
+    public void sendNotificationEmail(String recipientEmail, String displayName, String title, String body, String link) {
+        if (!isEnabled() || recipientEmail == null || recipientEmail.isBlank()) {
+            return;
+        }
+        try {
+            String safeName = escapeHtml(normalizeDisplayName(displayName));
+            String safeTitle = escapeHtml(title == null ? "Thông báo" : title);
+            String safeBody = escapeHtml(body == null ? "" : body);
+            String button = (link == null || link.isBlank()) ? "" :
+                    "<div style=\"text-align:center;margin-top:24px;\"><a href=\"" + escapeHtml(link)
+                    + "\" style=\"display:inline-block;background:#2563eb;color:#fff;text-decoration:none;font-weight:700;padding:13px 26px;border-radius:12px;\">Xem chi tiết</a></div>";
+
+            String htmlContent = """
+                    <!doctype html>
+                    <html lang="vi">
+                      <body style="margin:0;background:#f4f7ff;font-family:Arial,Helvetica,sans-serif;color:#111827;">
+                        <table role="presentation" width="100%%" cellspacing="0" cellpadding="0" style="background:#f4f7ff;padding:32px 16px;">
+                          <tr><td align="center">
+                            <table role="presentation" width="100%%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#ffffff;border-radius:24px;overflow:hidden;border:1px solid #dfe7fb;">
+                              <tr><td style="padding:30px 32px 18px;background:linear-gradient(135deg,#2563eb,#ff7a1a);color:#ffffff;">
+                                <div style="font-size:13px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;">nextplease</div>
+                                <h1 style="margin:14px 0 0;font-size:24px;line-height:1.25;">%s</h1>
+                              </td></tr>
+                              <tr><td style="padding:30px 32px;">
+                                <p style="margin:0 0 14px;font-size:16px;line-height:1.6;">Chào <strong>%s</strong>,</p>
+                                <p style="margin:0;font-size:16px;line-height:1.7;color:#374151;">%s</p>
+                                %s
+                              </td></tr>
+                            </table>
+                          </td></tr>
+                        </table>
+                      </body>
+                    </html>
+                    """.formatted(safeTitle, safeName, safeBody, button);
+
+            String textContent = (title == null ? "" : title) + "\n\n" + (body == null ? "" : body)
+                    + (link == null || link.isBlank() ? "" : "\n\n" + link) + "\n\nnextplease";
+
+            Map<String, Object> requestBody = Map.of(
+                    "sender", Map.of("name", fromName, "email", fromAddress),
+                    "to", List.of(Map.of("email", recipientEmail)),
+                    "subject", title == null ? "Thông báo từ nextplease" : title,
+                    "htmlContent", htmlContent,
+                    "textContent", textContent
+            );
+            restClient.post()
+                    .uri("/smtp/email")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(requestBody)
+                    .retrieve()
+                    .toBodilessEntity();
+            log.info("Sent notification email to={}", recipientEmail);
+        } catch (Exception e) {
+            log.warn("Failed to send notification email to={}: {}", recipientEmail, e.getMessage());
+        }
+    }
+
     private String buildCandidateOtpText(String displayName, String otp, OffsetDateTime expiresAt) {
         String safeName = normalizeDisplayName(displayName);
         return """
