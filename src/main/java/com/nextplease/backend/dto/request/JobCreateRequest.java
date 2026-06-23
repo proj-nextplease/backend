@@ -23,6 +23,8 @@ public record JobCreateRequest(
         Boolean isRemote,
         @Min(1) Integer capacity,
         OffsetDateTime deadlineAt,
+        String bannerUrl,
+        String bannerPos,
         @Valid List<SkillRequirement> skills,
         @Valid List<FormField> formFields
 ) {

@@ -15,7 +15,9 @@ public record ExperienceDto(
         String detail,
         
         String startDate,
-        
-        String endDate
+
+        String endDate,
+
+        java.util.List<String> proofImages
 ) {
 }

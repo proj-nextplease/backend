@@ -193,7 +193,7 @@ public class WalletService {
         } catch (Exception ignored) {}
 
         OffsetDateTime newExpiry = (currentExpiry != null ? currentExpiry : now)
-                .plusDays(PREMIUM_DURATION_DAYS);
+                .plusDays(configService.getInt("premium_duration_days", PREMIUM_DURATION_DAYS));
 
         // Update premium_until on app_users
         jdbcTemplate.update("""

@@ -256,6 +256,7 @@ public class ApplicationService {
                     a.id,
                     a.status,
                     a.cover_note,
+                    a.custom_answers::text as custom_answers,
                     a.reject_reason,
                     a.applied_at,
                     a.updated_at,

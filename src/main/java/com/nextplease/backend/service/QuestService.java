@@ -138,6 +138,8 @@ public class QuestService {
                     q.capacity,
                     q.starts_at    as "startsAt",
                     q.ends_at      as "endsAt",
+                    q.banner_url   as "bannerUrl",
+                    q.banner_pos   as "bannerPos",
                     q.status,
                     c.id           as "companyId",
                     c.name         as "companyName",
@@ -244,6 +246,7 @@ public class QuestService {
                     qa.id,
                     qa.status,
                     qa.cover_note,
+                    qa.custom_answers::text as "customAnswers",
                     qa.reject_reason as "rejectReason",
                     qa.applied_at as "appliedAt",
                     qa.updated_at as "updatedAt",
@@ -314,10 +317,10 @@ public class QuestService {
         UUID questId = jdbcTemplate.queryForObject("""
                 insert into quests
                     (company_id, created_by, title, description, category, exp_reward, np_reward,
-                     min_req_rs, capacity, starts_at, ends_at, status)
+                     min_req_rs, capacity, starts_at, ends_at, banner_url, banner_pos, status)
                 values
                     (:companyId, :createdBy, :title, :description, :category, :expReward, :npReward,
-                     :minReqRs, :capacity, :startsAt::timestamptz, :endsAt::timestamptz, 'PENDING')
+                     :minReqRs, :capacity, :startsAt::timestamptz, :endsAt::timestamptz, :bannerUrl, :bannerPos, 'PENDING')
                 returning id
                 """, new MapSqlParameterSource()
                 .addValue("companyId", companyId)
@@ -330,7 +333,9 @@ public class QuestService {
                 .addValue("minReqRs", minReqRs)
                 .addValue("capacity", capacity)
                 .addValue("startsAt", request.get("startsAt"))
-                .addValue("endsAt", request.get("endsAt")),
+                .addValue("endsAt", request.get("endsAt"))
+                .addValue("bannerUrl", request.get("bannerUrl"))
+                .addValue("bannerPos", request.get("bannerPos")),
                 UUID.class);
 
         saveQuestFormFields(questId, request.get("formFields"));
@@ -525,7 +530,7 @@ public class QuestService {
             Map<String, Object> quest = jdbcTemplate.queryForMap("""
                     select id, title, description, category, status, exp_reward as "expReward",
                            min_req_rs as "minReqRs", capacity, ends_at as "endsAt",
-                           rejection_reason as "rejectionReason"
+                           banner_url as "bannerUrl", banner_pos as "bannerPos", rejection_reason as "rejectionReason"
                     from quests
                     where id = :questId and deleted_at is null
                     """, Map.of("questId", questId));
@@ -553,6 +558,8 @@ public class QuestService {
                     min_req_rs  = coalesce(:minReqRs, min_req_rs),
                     capacity    = coalesce(:capacity, capacity),
                     ends_at     = coalesce(cast(:endsAt as timestamptz), ends_at),
+                    banner_url  = :bannerUrl,
+                    banner_pos  = :bannerPos,
                     status      = 'PENDING',
                     updated_at  = now()
                 where id = :questId
@@ -563,6 +570,8 @@ public class QuestService {
                 .addValue("minReqRs",    request.get("minReqRs"))
                 .addValue("capacity",    request.get("capacity"))
                 .addValue("endsAt",      request.get("endsAt"))
+                .addValue("bannerUrl",   request.get("bannerUrl"))
+                .addValue("bannerPos",   request.get("bannerPos"))
                 .addValue("questId",     questId));
 
         if (request.containsKey("formFields")) {

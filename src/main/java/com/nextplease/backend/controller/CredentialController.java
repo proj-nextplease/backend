@@ -47,6 +47,7 @@ public class CredentialController {
                 body.roleLevel(),
                 body.description(),
                 body.proofLink(),
+                body.proofImages(),
                 body.startedAt(),
                 body.endedAt()
         );
@@ -74,6 +75,8 @@ public class CredentialController {
 
             @Size(max = 500)
             String proofLink,
+
+            java.util.List<String> proofImages,
 
             String startedAt,
             String endedAt
