@@ -10,6 +10,13 @@ spring:
       minimum-idle: ${DB_MIN_IDLE:1}
       connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:10000}
       connection-init-sql: SET TIME ZONE 'Asia/Ho_Chi_Minh'
+      # Recycle/validate connections so a laptop sleep or Supabase idle-close
+      # doesn't leave the pool serving dead connections (which caused
+      # "Connection is not available / This connection has been closed" 500s).
+      max-lifetime: ${DB_MAX_LIFETIME_MS:300000}
+      idle-timeout: ${DB_IDLE_TIMEOUT_MS:120000}
+      keepalive-time: ${DB_KEEPALIVE_MS:60000}
+      validation-timeout: ${DB_VALIDATION_TIMEOUT_MS:5000}
   jackson:
     time-zone: Asia/Ho_Chi_Minh
   mail:

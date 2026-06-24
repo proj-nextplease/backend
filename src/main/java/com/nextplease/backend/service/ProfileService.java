@@ -224,7 +224,8 @@ public class ProfileService {
 
         // 6. Get experiences
         List<ExperienceDto> experiences = jdbcTemplate.query("""
-                select id, project_name, position, description, started_at, ended_at, proof_images::text as proof_images from experiences
+                select id, project_name, position, description, started_at, ended_at, proof_images::text as proof_images,
+                       category, role_level, proof_link from experiences
                 where profile_id = :profileId
                 order by created_at asc
                 """, Map.of("profileId", profileId), (rs, rowNum) -> new ExperienceDto(
@@ -234,7 +235,10 @@ public class ProfileService {
                         rs.getString("description"),
                         formatMmYy(rs.getDate("started_at")),
                         formatMmYy(rs.getDate("ended_at")),
-                        deserializeImages(rs.getString("proof_images"))
+                        deserializeImages(rs.getString("proof_images")),
+                        rs.getString("category"),
+                        rs.getString("role_level"),
+                        rs.getString("proof_link")
                 ));
 
         boolean onboardingCompleted = profile.get("onboarding_completed") != null && (Boolean) profile.get("onboarding_completed");
@@ -313,7 +317,8 @@ public class ProfileService {
                 """, Map.of("profileId", profileId), (rs, rowNum) -> rs.getString("name"));
 
         List<ExperienceDto> experiences = jdbcTemplate.query("""
-                select id, project_name, position, description, started_at, ended_at, proof_images::text as proof_images from experiences
+                select id, project_name, position, description, started_at, ended_at, proof_images::text as proof_images,
+                       category, role_level, proof_link from experiences
                 where profile_id = :profileId
                 order by created_at asc
                 """, Map.of("profileId", profileId), (rs, rowNum) -> new ExperienceDto(
@@ -323,7 +328,10 @@ public class ProfileService {
                         rs.getString("description"),
                         formatMmYy(rs.getDate("started_at")),
                         formatMmYy(rs.getDate("ended_at")),
-                        deserializeImages(rs.getString("proof_images"))
+                        deserializeImages(rs.getString("proof_images")),
+                        rs.getString("category"),
+                        rs.getString("role_level"),
+                        rs.getString("proof_link")
                 ));
 
         boolean onboardingCompleted = Boolean.TRUE.equals(profile.get("onboarding_completed"));
@@ -540,11 +548,19 @@ public class ProfileService {
      */
     private void updateExperiences(UUID profileId, List<ExperienceDto> experiences) {
         java.util.List<Map<String, Object>> existingRows = jdbcTemplate.queryForList(
-                "select id, verification_status from experiences where profile_id = :profileId",
+                "select id, verification_status, source from experiences where profile_id = :profileId",
                 Map.of("profileId", profileId));
         Map<UUID, String> existingStatus = new HashMap<>();
+        // Rows submitted via the dashboard "Nộp minh chứng" form are tagged
+        // source='CREDENTIAL'. Track them so a Portfolio save can never delete
+        // them — even if the client sends a stale list that omits them.
+        java.util.Set<UUID> credentialOwned = new java.util.HashSet<>();
         for (Map<String, Object> row : existingRows) {
-            existingStatus.put((UUID) row.get("id"), (String) row.get("verification_status"));
+            UUID id = (UUID) row.get("id");
+            existingStatus.put(id, (String) row.get("verification_status"));
+            if ("CREDENTIAL".equals(row.get("source"))) {
+                credentialOwned.add(id);
+            }
         }
 
         java.util.Set<UUID> keptIds = new java.util.HashSet<>();
@@ -566,34 +582,63 @@ public class ProfileService {
                     .addValue("description", exp.detail() == null ? "" : exp.detail().trim())
                     .addValue("startDate", startDate != null ? java.sql.Date.valueOf(startDate) : null)
                     .addValue("endDate", endDate != null ? java.sql.Date.valueOf(endDate) : null)
-                    .addValue("proofImages", serializeImages(exp.proofImages()));
+                    .addValue("proofImages", serializeImages(exp.proofImages()))
+                    .addValue("category", sanitizeCategory(exp.category()))
+                    .addValue("roleLevel", sanitizeRoleLevel(exp.roleLevel()))
+                    .addValue("proofLink", blankToNull(exp.proofLink()));
 
             if (existingId != null && existingStatus.containsKey(existingId)) {
-                // Update content only — status/points untouched (no re-award).
                 keptIds.add(existingId);
-                jdbcTemplate.update("""
-                        update experiences set
-                            project_name = :organization,
-                            position     = :title,
-                            description  = :description,
-                            started_at   = :startDate,
-                            ended_at     = :endDate,
-                            proof_images = cast(:proofImages as jsonb),
-                            updated_at   = now()
-                        where id = :id
-                        """, params.addValue("id", existingId));
+                boolean pending = "PENDING".equals(existingStatus.get(existingId));
+                if (pending) {
+                    // Still pending review → safe to update everything, including the
+                    // category/role_level that decide the EXP/RS to be awarded.
+                    jdbcTemplate.update("""
+                            update experiences set
+                                project_name = :organization,
+                                position     = :title,
+                                description  = :description,
+                                category     = :category,
+                                role_level   = :roleLevel,
+                                proof_link   = :proofLink,
+                                started_at   = :startDate,
+                                ended_at     = :endDate,
+                                proof_images = cast(:proofImages as jsonb),
+                                updated_at   = now()
+                            where id = :id
+                            """, params.addValue("id", existingId));
+                } else {
+                    // Already reviewed → never change category/role_level (would
+                    // misrepresent the already-awarded points). Only edit content.
+                    jdbcTemplate.update("""
+                            update experiences set
+                                project_name = :organization,
+                                position     = :title,
+                                description  = :description,
+                                proof_link   = :proofLink,
+                                started_at   = :startDate,
+                                ended_at     = :endDate,
+                                proof_images = cast(:proofImages as jsonb),
+                                updated_at   = now()
+                            where id = :id
+                            """, params.addValue("id", existingId));
+                }
             } else {
                 jdbcTemplate.update("""
-                        insert into experiences (id, profile_id, project_name, position, category, description, started_at, ended_at, proof_images, verification_status, created_at, updated_at)
-                        values (gen_random_uuid(), :profileId, :organization, :title, 'COMPANY_PROJECT', :description, :startDate, :endDate, cast(:proofImages as jsonb), 'PENDING', now(), now())
+                        insert into experiences (id, profile_id, project_name, position, category, role_level, proof_link, description, started_at, ended_at, proof_images, verification_status, source, created_at, updated_at)
+                        values (gen_random_uuid(), :profileId, :organization, :title, :category, :roleLevel, :proofLink, :description, :startDate, :endDate, cast(:proofImages as jsonb), 'PENDING', 'PORTFOLIO', now(), now())
                         """, params);
             }
         }
 
         // Delete only PENDING rows the user actually removed. Reviewed (APPROVED/
         // REJECTED) rows are preserved to keep awarded points & history consistent.
+        // Credential-form submissions are never deleted here — they are managed by
+        // the verification flow, not the Portfolio editor.
         for (Map.Entry<UUID, String> e : existingStatus.entrySet()) {
-            if (!keptIds.contains(e.getKey()) && "PENDING".equals(e.getValue())) {
+            if (!keptIds.contains(e.getKey())
+                    && "PENDING".equals(e.getValue())
+                    && !credentialOwned.contains(e.getKey())) {
                 jdbcTemplate.update("delete from experiences where id = :id", Map.of("id", e.getKey()));
             }
         }
@@ -606,6 +651,22 @@ public class ProfileService {
         } catch (IllegalArgumentException e) {
             return null; // FE-generated numeric ids for brand-new rows → treat as insert
         }
+    }
+
+    private static final java.util.Set<String> VALID_CATEGORIES = java.util.Set.of(
+            "CLUB_SMALL", "SCHOOL_CAMPAIGN", "COMPANY_PROJECT", "SHORT_INTERNSHIP", "FREELANCE_GIG");
+
+    /** Default unknown/blank categories to the smallest reward tier (defensive). */
+    private static String sanitizeCategory(String category) {
+        return category != null && VALID_CATEGORIES.contains(category) ? category : "CLUB_SMALL";
+    }
+
+    private static String sanitizeRoleLevel(String roleLevel) {
+        return "LEADER".equals(roleLevel) ? "LEADER" : "MEMBER";
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     private LocalDate parseMmYy(String value) {

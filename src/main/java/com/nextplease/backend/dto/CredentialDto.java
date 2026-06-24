@@ -15,7 +15,14 @@ public record CredentialDto(
         @NotBlank(message = "Thời gian cấp không được để trống")
         @Pattern(regexp = "^(0[1-9]|1[0-2])/[0-9]{2}$", message = "Thời gian cấp phải đúng định dạng MM/YY")
         String issuedAt,
-        
-        String fileName
+
+        String fileName,
+
+        // Base64 data URL of the uploaded certificate file + its MIME type, so the
+        // file can be viewed again after reload (stored in the credentials JSONB,
+        // mirroring how experience proof images are persisted).
+        String fileData,
+
+        String fileType
 ) {
 }

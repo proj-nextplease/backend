@@ -86,12 +86,12 @@ public class CredentialService {
                 insert into experiences (
                     profile_id, project_name, position, category, role_level,
                     description, proof_link, proof_images, started_at, ended_at,
-                    verification_status, created_at, updated_at
+                    verification_status, source, created_at, updated_at
                 ) values (
                     :profileId, :projectName, :position, :category, :roleLevel,
                     :description, :proofLink, :proofImages::jsonb,
                     cast(:startedAt as date), cast(:endedAt as date),
-                    'PENDING', now(), now()
+                    'PENDING', 'CREDENTIAL', now(), now()
                 )
                 returning id
                 """, new MapSqlParameterSource()
@@ -232,6 +232,36 @@ public class CredentialService {
                 where e.verification_status = 'PENDING'
                   and e.deleted_at is null
                 order by e.created_at asc
+                """, Map.of());
+    }
+
+    /** Admin fetch: ALL submissions across all users, every status (newest first). */
+    public List<Map<String, Object>> getAllSubmissions() {
+        return jdbcTemplate.queryForList("""
+                select e.id,
+                       e.project_name,
+                       e.position,
+                       e.category,
+                       e.role_level,
+                       e.description,
+                       e.proof_link,
+                       e.proof_images::text as proof_images,
+                       e.verification_status,
+                       e.reject_reason,
+                       e.verified_at,
+                       e.started_at,
+                       e.ended_at,
+                       e.created_at,
+                       u.email         as candidate_email,
+                       u.display_name  as candidate_name,
+                       p.reputation_score,
+                       p.total_exp,
+                       p.current_level
+                from experiences e
+                join profiles p on p.id = e.profile_id
+                join app_users u on u.id = p.user_id
+                where e.deleted_at is null
+                order by e.created_at desc
                 """, Map.of());
     }
 
