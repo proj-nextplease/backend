@@ -6,6 +6,7 @@ import com.nextplease.backend.dto.CredentialDto;
 import com.nextplease.backend.dto.ExperienceDto;
 import com.nextplease.backend.dto.request.PortfolioRequest;
 import com.nextplease.backend.dto.response.PortfolioResponse;
+import com.nextplease.backend.dto.response.PublicPortfolioResponse;
 import com.nextplease.backend.exception.ResourceNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.LocalDate;
@@ -265,13 +266,13 @@ public class ProfileService {
         );
     }
 
-    public PortfolioResponse getPortfolioByUserId(UUID userId) {
+    public PublicPortfolioResponse getPortfolioByUserId(UUID userId) {
         Map<String, Object> userRow;
         try {
+            // Public view: never read the wallet — npBalance is private.
             userRow = jdbcTemplate.queryForMap("""
-                    select u.display_name, coalesce(w.np_balance, 0) as np_balance
+                    select u.display_name
                     from app_users u
-                    left join wallets w on w.user_id = u.id
                     where u.id = :userId
                     """, Map.of("userId", userId));
         } catch (EmptyResultDataAccessException e) {
@@ -279,7 +280,6 @@ public class ProfileService {
         }
 
         String displayName = (String) userRow.get("display_name");
-        long npBalance = userRow.get("np_balance") != null ? ((Number) userRow.get("np_balance")).longValue() : 0L;
 
         Map<String, Object> profile;
         try {
@@ -308,7 +308,12 @@ public class ProfileService {
         }
 
         Map<String, Object> avatarConfig = parseJsonMap(getJsonString(profile.get("avatar_config")));
-        List<CredentialDto> credentials = parseCredentialsJson(getJsonString(profile.get("credentials")));
+        // Public view: strip the uploaded certificate file (fileData) and its name —
+        // these are private documents (e.g. CV/credential PDFs) that must not be exposed
+        // to strangers. Keep only the displayable metadata (name, issuer, issuedAt).
+        List<CredentialDto> credentials = parseCredentialsJson(getJsonString(profile.get("credentials"))).stream()
+                .map(c -> new CredentialDto(c.id(), c.name(), c.issuer(), c.issuedAt(), null, null, null))
+                .toList();
 
         List<String> skills = jdbcTemplate.query("""
                 select s.name from skills s
@@ -316,10 +321,12 @@ public class ProfileService {
                 where ps.profile_id = :profileId
                 """, Map.of("profileId", profileId), (rs, rowNum) -> rs.getString("name"));
 
+        // Public view shows only verified (APPROVED) experiences — never PENDING/REJECTED proof.
         List<ExperienceDto> experiences = jdbcTemplate.query("""
                 select id, project_name, position, description, started_at, ended_at, proof_images::text as proof_images,
                        category, role_level, proof_link from experiences
                 where profile_id = :profileId
+                  and verification_status = 'APPROVED'
                 order by created_at asc
                 """, Map.of("profileId", profileId), (rs, rowNum) -> new ExperienceDto(
                         rs.getString("id"),
@@ -334,15 +341,14 @@ public class ProfileService {
                         rs.getString("proof_link")
                 ));
 
-        boolean onboardingCompleted = Boolean.TRUE.equals(profile.get("onboarding_completed"));
         int reputationScore = profile.get("reputation_score") != null ? ((Number) profile.get("reputation_score")).intValue() : 0;
         long totalExp = profile.get("total_exp") != null ? ((Number) profile.get("total_exp")).longValue() : 0L;
         int currentLevel = profile.get("current_level") != null ? ((Number) profile.get("current_level")).intValue() : 1;
 
-        return new PortfolioResponse(
+        return new PublicPortfolioResponse(
                 displayName, headline, schoolName, location, bio,
                 skills, avatarConfig, experiences, credentials,
-                onboardingCompleted, reputationScore, totalExp, currentLevel, npBalance
+                reputationScore, totalExp, currentLevel
         );
     }
 

@@ -3,6 +3,7 @@ package com.nextplease.backend.controller;
 import com.nextplease.backend.dto.request.PortfolioRequest;
 import com.nextplease.backend.dto.response.ApiResponse;
 import com.nextplease.backend.dto.response.PortfolioResponse;
+import com.nextplease.backend.dto.response.PublicPortfolioResponse;
 import com.nextplease.backend.service.ProfileService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -30,7 +31,7 @@ public class ProfileController {
     }
 
     @GetMapping("/{userId}/public")
-    public ApiResponse<PortfolioResponse> getPublicProfile(@PathVariable UUID userId) {
+    public ApiResponse<PublicPortfolioResponse> getPublicProfile(@PathVariable UUID userId) {
         return ApiResponse.success(profileService.getPortfolioByUserId(userId));
     }
 

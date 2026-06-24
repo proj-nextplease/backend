@@ -5,6 +5,8 @@ import com.nextplease.backend.dto.response.LoginResponse;
 import com.nextplease.backend.entity.AppUser;
 import com.nextplease.backend.exception.AppException;
 import com.nextplease.backend.repository.AppUserRepository;
+import com.nextplease.backend.security.ratelimit.ClientIpResolver;
+import jakarta.servlet.http.HttpServletRequest;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -16,6 +18,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 @Service
 public class AuthService {
@@ -141,11 +145,12 @@ public class AuthService {
                         'user.logged_in',
                         'app_user',
                         :userId,
-                        jsonb_build_object('email', :email, 'ip_address', 'local_dev')
+                        jsonb_build_object('email', :email, 'ip_address', :ipAddress)
                     )
                     """, Map.of(
                     "userId", appUser.getId(),
-                    "email", appUser.getEmail()
+                    "email", appUser.getEmail(),
+                    "ipAddress", currentRequestIp()
             ));
         } catch (Exception e) {
             log.warn("Failed to write login audit log: {}", e.getMessage());
@@ -164,6 +169,17 @@ public class AuthService {
                         roles
                 )
         );
+    }
+
+    /** Best-effort real client IP of the current HTTP request, for audit logging. */
+    private String currentRequestIp() {
+        if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attrs) {
+            HttpServletRequest request = attrs.getRequest();
+            if (request != null) {
+                return ClientIpResolver.resolve(request);
+            }
+        }
+        return "unknown";
     }
 
     private AppUser provisionLocalUser(UUID supabaseUserId, String email, String displayName) {
