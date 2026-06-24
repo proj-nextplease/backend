@@ -1,12 +1,15 @@
 package com.nextplease.backend.service;
 
 import com.nextplease.backend.exception.AppException;
+import jakarta.annotation.PostConstruct;
 import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
@@ -27,12 +30,16 @@ public class SupabaseAdminService {
 
     private final RestClient restClient;
     private final boolean enabled;
+    /** Whether the insecure mock-auth fallback is permitted (dev/local/test profiles only). */
+    private final boolean mockAuthAllowed;
 
     public SupabaseAdminService(
             @Value("${app.supabase.url:}") String supabaseUrl,
-            @Value("${app.supabase.service-role-key:}") String serviceRoleKey
+            @Value("${app.supabase.service-role-key:}") String serviceRoleKey,
+            Environment environment
     ) {
         this.enabled = !supabaseUrl.isBlank() && !serviceRoleKey.isBlank();
+        this.mockAuthAllowed = environment.acceptsProfiles(Profiles.of("dev", "local", "test"));
 
         if (this.enabled) {
             this.restClient = RestClient.builder()
@@ -44,6 +51,25 @@ public class SupabaseAdminService {
             this.restClient = null;
             log.warn("SupabaseAdminService is DISABLED – SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is missing. "
                     + "User creation in Supabase will be skipped (dev/test mode).");
+        }
+    }
+
+    /**
+     * Fail fast: if Supabase is not configured, the service silently falls back to an
+     * INSECURE mock that issues unsigned ("mock_signature") JWTs and accepts any login.
+     * That must never happen outside dev/local/test. Refuse to start instead.
+     */
+    @PostConstruct
+    void guardMockAuth() {
+        if (!enabled && !mockAuthAllowed) {
+            throw new IllegalStateException(
+                    "SUPABASE_PROJECT_URL / SUPABASE_SERVICE_ROLE_KEY are not configured and the active "
+                    + "Spring profile is not dev/local/test. Refusing to start with insecure mock authentication. "
+                    + "Set the Supabase variables, or run with SPRING_PROFILES_ACTIVE=dev for local development.");
+        }
+        if (!enabled) {
+            log.warn("⚠️  Mock authentication ENABLED (dev profile, Supabase not configured) – "
+                    + "unsigned tokens are accepted. NEVER use this in production.");
         }
     }
 

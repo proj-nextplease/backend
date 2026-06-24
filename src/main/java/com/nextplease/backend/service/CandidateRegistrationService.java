@@ -56,7 +56,7 @@ public class CandidateRegistrationService {
             SupabaseAdminService supabaseAdminService,
             ReputationService reputationService,
             ConfigService configService,
-            @Value("${app.auth.registration.expose-dev-otp:true}") boolean exposeDevOtp
+            @Value("${app.auth.registration.expose-dev-otp:false}") boolean exposeDevOtp
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.emailDeliveryService = emailDeliveryService;

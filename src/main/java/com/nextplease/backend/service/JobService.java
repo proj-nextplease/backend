@@ -535,11 +535,13 @@ public class JobService {
     }
 
     public List<Map<String, Object>> getApprovedCompanies() {
+        // Public directory: expose only non-sensitive fields. Tax code, representative
+        // phone, and advisor contact are internal/PII and must NOT be returned here.
         return jdbcTemplate.queryForList("""
                 select c.id, c.name, c.company_type as "companyType", c.description, c.logo_url as "logoUrl",
-                       c.website_url as "websiteUrl", c.tax_code as "taxCode", c.fanpage_url as "fanpageUrl",
-                       c.representative_name as "representativeName", c.representative_phone as "representativePhone",
-                       c.school_id as "schoolId", s.name as "schoolName", c.advisor_contact as "advisorContact"
+                       c.website_url as "websiteUrl", c.fanpage_url as "fanpageUrl",
+                       c.representative_name as "representativeName",
+                       c.school_id as "schoolId", s.name as "schoolName"
                 from companies c
                 left join schools s on c.school_id = s.id
                 where c.verification_status = 'APPROVED'
@@ -549,11 +551,12 @@ public class JobService {
 
     public Map<String, Object> getCompanyDetails(UUID id) {
         try {
+            // Public detail: same exclusion of tax code / phone / advisor contact.
             return jdbcTemplate.queryForMap("""
                     select c.id, c.name, c.company_type as "companyType", c.description, c.logo_url as "logoUrl",
-                           c.website_url as "websiteUrl", c.tax_code as "taxCode", c.fanpage_url as "fanpageUrl",
-                           c.representative_name as "representativeName", c.representative_phone as "representativePhone",
-                           c.school_id as "schoolId", s.name as "schoolName", c.advisor_contact as "advisorContact"
+                           c.website_url as "websiteUrl", c.fanpage_url as "fanpageUrl",
+                           c.representative_name as "representativeName",
+                           c.school_id as "schoolId", s.name as "schoolName"
                     from companies c
                     left join schools s on c.school_id = s.id
                     where c.id = :id and c.verification_status = 'APPROVED'
