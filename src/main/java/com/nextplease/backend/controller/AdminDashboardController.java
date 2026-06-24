@@ -401,6 +401,13 @@ public class AdminDashboardController {
         return ApiResponse.success(credentialService.getPendingQueue());
     }
 
+    /** GET /api/v1/admin/dashboard/verification-queue/all — every submission, all statuses */
+    @GetMapping("/verification-queue/all")
+    public ApiResponse<List<Map<String, Object>>> getAllVerificationSubmissions() {
+        requireAdmin();
+        return ApiResponse.success(credentialService.getAllSubmissions());
+    }
+
     /** POST /api/v1/admin/dashboard/verification-queue/{id}/approve */
     @PostMapping("/verification-queue/{id}/approve")
     public ApiResponse<String> approveCredential(

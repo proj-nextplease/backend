@@ -18,6 +18,12 @@ public record ExperienceDto(
 
         String endDate,
 
-        java.util.List<String> proofImages
+        java.util.List<String> proofImages,
+
+        String category,
+
+        String roleLevel,
+
+        String proofLink
 ) {
 }
