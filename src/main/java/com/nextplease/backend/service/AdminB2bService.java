@@ -41,6 +41,10 @@ public class AdminB2bService {
                        c.created_at as "createdAt",
                        u.email as "ownerEmail",
                        s.name as "schoolName",
+                       ar.claimed_by_admin_id as "claimedByAdminId",
+                       admin_u.display_name as "claimedByAdminName",
+                       ar.claimed_at as "claimedAt",
+                       ar.internal_notes as "internalNotes",
                        exists (
                            select 1
                            from companies c2
@@ -51,6 +55,8 @@ public class AdminB2bService {
                 from companies c
                 join app_users u on c.owner_user_id = u.id
                 left join schools s on c.school_id = s.id
+                left join admin_reviews ar on ar.item_id = c.id and ar.item_type = 'B2B_PARTNER'
+                left join app_users admin_u on ar.claimed_by_admin_id = admin_u.id
                 where c.verification_status = 'PENDING'
                   and (c.tax_code is not null or c.document_url is not null or c.representative_name is not null)
                 order by c.created_at desc
