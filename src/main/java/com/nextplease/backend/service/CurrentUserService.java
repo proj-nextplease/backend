@@ -12,6 +12,7 @@ import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -29,17 +30,20 @@ public class CurrentUserService {
     private final ObjectMapper objectMapper;
     private final NamedParameterJdbcTemplate jdbcTemplate;
     private final UserJitProvisioningService userJitProvisioningService;
+    private final boolean jwtEnabled;
 
     public CurrentUserService(
             AppUserRepository appUserRepository,
             ObjectMapper objectMapper,
             NamedParameterJdbcTemplate jdbcTemplate,
-            UserJitProvisioningService userJitProvisioningService
+            UserJitProvisioningService userJitProvisioningService,
+            @Value("${app.security.jwt.enabled:false}") boolean jwtEnabled
     ) {
         this.appUserRepository = appUserRepository;
         this.objectMapper = objectMapper;
         this.jdbcTemplate = jdbcTemplate;
         this.userJitProvisioningService = userJitProvisioningService;
+        this.jwtEnabled = jwtEnabled;
     }
 
     private HttpServletRequest getCurrentRequest() {
@@ -115,6 +119,10 @@ public class CurrentUserService {
             return UUID.fromString(jwtAuthenticationToken.getToken().getSubject());
         }
 
+        if (jwtEnabled) {
+            throw new ResourceNotFoundException("Authenticated Supabase session is required");
+        }
+
         // Fallback for dev mode where APP_SECURITY_JWT_ENABLED = false
         HttpServletRequest request = getCurrentRequest();
         if (request != null) {
@@ -160,6 +168,10 @@ public class CurrentUserService {
             }
         }
 
+        if (jwtEnabled) {
+            return Set.of();
+        }
+
         // Fallback for dev mode where APP_SECURITY_JWT_ENABLED = false
         HttpServletRequest request = getCurrentRequest();
         if (request != null) {
@@ -199,6 +211,10 @@ public class CurrentUserService {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication instanceof JwtAuthenticationToken jwtAuthenticationToken) {
             return jwtAuthenticationToken.getToken().getClaims();
+        }
+
+        if (jwtEnabled) {
+            return Map.of();
         }
 
         HttpServletRequest request = getCurrentRequest();
