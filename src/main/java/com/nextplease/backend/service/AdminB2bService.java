@@ -52,6 +52,7 @@ public class AdminB2bService {
                 join app_users u on c.owner_user_id = u.id
                 left join schools s on c.school_id = s.id
                 where c.verification_status = 'PENDING'
+                  and (c.tax_code is not null or c.document_url is not null or c.representative_name is not null)
                 order by c.created_at desc
                 """, Map.of());
     }

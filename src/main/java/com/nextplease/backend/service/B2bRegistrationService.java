@@ -283,18 +283,25 @@ public class B2bRegistrationService {
                 where id = :companyId
                 """, Map.of("companyId", companyId));
         // Surface the caller's role so the UI can gate owner-only actions.
-        company.put("myRole", companyAccessService.roleInCompany(userId, companyId));
-        return company;
+        String role = companyAccessService.roleInCompany(userId, companyId);
+        java.util.Map<String, Object> mutableCompany = new java.util.HashMap<>(company);
+        mutableCompany.put("myRole", role);
+
+        // Hide actual documentUrl from non-owner accounts
+        if (!"OWNER".equals(role) && mutableCompany.get("documentUrl") != null) {
+            mutableCompany.put("documentUrl", "HIDDEN_FOR_NON_OWNERS");
+        }
+        return mutableCompany;
     }
 
-    /** Resolves the company the user manages and asserts OWNER/MANAGER rights for mutations. */
+    /** Resolves the company the user manages and asserts OWNER rights for mutations. */
     private UUID resolveManagedCompanyId(UUID userId) {
         UUID companyId = companyAccessService.findActiveCompanyId(userId)
                 .orElseThrow(() -> new com.nextplease.backend.exception.ResourceNotFoundException(
                         "Không tìm thấy thông tin đối tác để cập nhật."));
         String role = companyAccessService.roleInCompany(userId, companyId);
-        if (!"OWNER".equals(role) && !"MANAGER".equals(role)) {
-            throw new AppException(HttpStatus.FORBIDDEN, "Bạn không có quyền chỉnh sửa hồ sơ tổ chức.");
+        if (!"OWNER".equals(role)) {
+            throw new AppException(HttpStatus.FORBIDDEN, "Chỉ Chủ sở hữu (OWNER) mới có quyền chỉnh sửa hồ sơ tổ chức.");
         }
         return companyId;
     }
