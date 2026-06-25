@@ -436,7 +436,7 @@ public class CompanyMembershipService {
         // owner_user_id is NOT NULL; seed it with the admin until the representative accepts the OWNER invite.
         UUID companyId = jdbcTemplate.queryForObject("""
                 insert into companies (owner_user_id, name, company_type, verification_status, created_at, updated_at)
-                values (:adminUserId, :name, :type, 'APPROVED', now(), now())
+                values (:adminUserId, :name, :type, 'PENDING', now(), now())
                 returning id
                 """, new MapSqlParameterSource()
                 .addValue("adminUserId", adminUserId)
