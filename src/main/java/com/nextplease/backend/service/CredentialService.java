@@ -225,10 +225,16 @@ public class CredentialService {
                        u.display_name  as candidate_name,
                        p.reputation_score,
                        p.total_exp,
-                       p.current_level
+                       p.current_level,
+                       ar.claimed_by_admin_id as "claimedByAdminId",
+                       admin_u.display_name as "claimedByAdminName",
+                       ar.claimed_at as "claimedAt",
+                       ar.internal_notes as "internalNotes"
                 from experiences e
                 join profiles p on p.id = e.profile_id
                 join app_users u on u.id = p.user_id
+                left join admin_reviews ar on ar.item_id = e.id and ar.item_type = 'EXPERIENCE'
+                left join app_users admin_u on ar.claimed_by_admin_id = admin_u.id
                 where e.verification_status = 'PENDING'
                   and e.deleted_at is null
                 order by e.created_at asc
@@ -256,10 +262,16 @@ public class CredentialService {
                        u.display_name  as candidate_name,
                        p.reputation_score,
                        p.total_exp,
-                       p.current_level
+                       p.current_level,
+                       ar.claimed_by_admin_id as "claimedByAdminId",
+                       admin_u.display_name as "claimedByAdminName",
+                       ar.claimed_at as "claimedAt",
+                       ar.internal_notes as "internalNotes"
                 from experiences e
                 join profiles p on p.id = e.profile_id
                 join app_users u on u.id = p.user_id
+                left join admin_reviews ar on ar.item_id = e.id and ar.item_type = 'EXPERIENCE'
+                left join app_users admin_u on ar.claimed_by_admin_id = admin_u.id
                 where e.deleted_at is null
                 order by e.created_at desc
                 """, Map.of());

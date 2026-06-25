@@ -220,9 +220,15 @@ public class AdminDashboardController {
                        j.created_at as "createdAt",
                        c.name as "companyName",
                        c.company_type as "companyType",
-                       'JOB' as "postType"
+                       'JOB' as "postType",
+                       ar.claimed_by_admin_id as "claimedByAdminId",
+                       admin_u.display_name as "claimedByAdminName",
+                       ar.claimed_at as "claimedAt",
+                       ar.internal_notes as "internalNotes"
                 from jobs j
                 join companies c on j.company_id = c.id
+                left join admin_reviews ar on ar.item_id = j.id and ar.item_type = 'JOB'
+                left join app_users admin_u on ar.claimed_by_admin_id = admin_u.id
                 where j.deleted_at is null
 
                 union all
@@ -234,9 +240,15 @@ public class AdminDashboardController {
                        q.created_at as "createdAt",
                        c.name as "companyName",
                        c.company_type as "companyType",
-                       'QUEST' as "postType"
+                       'QUEST' as "postType",
+                       ar.claimed_by_admin_id as "claimedByAdminId",
+                       admin_u.display_name as "claimedByAdminName",
+                       ar.claimed_at as "claimedAt",
+                       ar.internal_notes as "internalNotes"
                 from quests q
                 join companies c on q.company_id = c.id
+                left join admin_reviews ar on ar.item_id = q.id and ar.item_type = 'JOB'
+                left join app_users admin_u on ar.claimed_by_admin_id = admin_u.id
                 where q.deleted_at is null
 
                 order by "createdAt" desc
