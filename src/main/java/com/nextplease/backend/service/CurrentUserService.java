@@ -28,15 +28,18 @@ public class CurrentUserService {
     private final AppUserRepository appUserRepository;
     private final ObjectMapper objectMapper;
     private final NamedParameterJdbcTemplate jdbcTemplate;
+    private final UserJitProvisioningService userJitProvisioningService;
 
     public CurrentUserService(
             AppUserRepository appUserRepository,
             ObjectMapper objectMapper,
-            NamedParameterJdbcTemplate jdbcTemplate
+            NamedParameterJdbcTemplate jdbcTemplate,
+            UserJitProvisioningService userJitProvisioningService
     ) {
         this.appUserRepository = appUserRepository;
         this.objectMapper = objectMapper;
         this.jdbcTemplate = jdbcTemplate;
+        this.userJitProvisioningService = userJitProvisioningService;
     }
 
     private HttpServletRequest getCurrentRequest() {
@@ -89,7 +92,7 @@ public class CurrentUserService {
                             }
                         }
 
-                        return provisionLocalUserJit(supabaseUserId, email, displayName, provider);
+                        return userJitProvisioningService.provisionLocalUserJit(supabaseUserId, email, displayName, provider);
                     });
         } catch (org.springframework.dao.DataIntegrityViolationException e) {
             log.info("Concurrent JIT provisioning detected in CurrentUserService for user: {}. Fetching existing user.", supabaseUserId);
@@ -217,70 +220,6 @@ public class CurrentUserService {
         return Map.of();
     }
 
-    private AppUser provisionLocalUserJit(UUID supabaseUserId, String email, String displayName, String authProvider) {
-        UUID userId = UUID.randomUUID();
-        log.info("JIT provisioning local database records for Supabase user via /me: {} (email: {}, provider: {})", supabaseUserId, email, authProvider);
 
-        jdbcTemplate.update("""
-                insert into app_users (
-                    id,
-                    supabase_user_id,
-                    email,
-                    display_name,
-                    status,
-                    auth_provider,
-                    created_at,
-                    updated_at
-                )
-                values (
-                    :userId,
-                    :supabaseUserId,
-                    :email,
-                    :displayName,
-                    'ACTIVE',
-                    :authProvider,
-                    now(),
-                    now()
-                )
-                """, Map.of(
-                "userId", userId,
-                "supabaseUserId", supabaseUserId,
-                "email", email.toLowerCase().trim(),
-                "displayName", displayName,
-                "authProvider", authProvider
-        ));
-
-        jdbcTemplate.update("""
-                insert into user_roles (user_id, role_code)
-                values (:userId, 'candidate_free')
-                """, Map.of("userId", userId));
-
-        jdbcTemplate.update("""
-                insert into profiles (user_id, headline, visibility)
-                values (:userId, 'Ứng viên nextplease', '{}'::jsonb)
-                """, Map.of("userId", userId));
-
-        jdbcTemplate.update("""
-                insert into wallets (user_id, np_balance, locked_np_balance)
-                values (:userId, 0, 0)
-                """, Map.of("userId", userId));
-
-        jdbcTemplate.update("""
-                insert into audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
-                values (
-                    :userId,
-                    'candidate.jit_provisioned',
-                    'app_user',
-                    :userId,
-                    jsonb_build_object('provider', :authProvider)
-                )
-                """, Map.of(
-                "userId", userId,
-                "authProvider", authProvider
-        ));
-
-        return appUserRepository.findById(userId)
-                .orElseThrow(() -> new ResourceNotFoundException("Không thể tìm thấy thông tin ứng viên vừa được khởi tạo JIT."));
-    }
 }
 

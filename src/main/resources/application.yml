@@ -55,6 +55,7 @@ spring:
         jwt:
           jwk-set-uri: ${SUPABASE_JWKS_URI:http://localhost/.well-known/jwks.json}
           issuer-uri: ${SUPABASE_ISSUER:http://localhost/auth/v1}
+          jws-algorithms: ES256
 
 server:
   port: ${PORT:8080}

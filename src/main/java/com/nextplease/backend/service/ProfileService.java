@@ -36,17 +36,20 @@ public class ProfileService {
     private final ObjectMapper objectMapper;
     private final ReputationService reputationService;
     private final ConfigService configService;
+    private final UserJitProvisioningService userJitProvisioningService;
 
     public ProfileService(
             NamedParameterJdbcTemplate jdbcTemplate,
             ObjectMapper objectMapper,
             ReputationService reputationService,
-            ConfigService configService
+            ConfigService configService,
+            UserJitProvisioningService userJitProvisioningService
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
         this.reputationService = reputationService;
         this.configService = configService;
+        this.userJitProvisioningService = userJitProvisioningService;
     }
 
     private HttpServletRequest getCurrentRequest() {
@@ -159,7 +162,13 @@ public class ProfileService {
             }
 
             try {
-                user = provisionLocalUserJit(supabaseUserId, email, displayName, provider);
+                com.nextplease.backend.entity.AppUser provisioned = userJitProvisioningService.provisionLocalUserJit(supabaseUserId, email, displayName, provider);
+                user = Map.of(
+                        "id", provisioned.getId(),
+                        "display_name", provisioned.getDisplayName(),
+                        "email", provisioned.getEmail(),
+                        "np_balance", 0L
+                );
             } catch (org.springframework.dao.DataIntegrityViolationException dive) {
                 log.info("Concurrent JIT provisioning detected in ProfileService.getPortfolio for user {}. Querying existing user details.", supabaseUserId);
                 user = jdbcTemplate.queryForMap("""
@@ -400,7 +409,13 @@ public class ProfileService {
 
             Map<String, Object> newUser;
             try {
-                newUser = provisionLocalUserJit(supabaseUserId, email, displayName, provider);
+                com.nextplease.backend.entity.AppUser provisioned = userJitProvisioningService.provisionLocalUserJit(supabaseUserId, email, displayName, provider);
+                newUser = Map.of(
+                        "id", provisioned.getId(),
+                        "display_name", provisioned.getDisplayName(),
+                        "email", provisioned.getEmail(),
+                        "np_balance", 0L
+                );
             } catch (org.springframework.dao.DataIntegrityViolationException dive) {
                 log.info("Concurrent JIT provisioning detected in ProfileService.updatePortfolio for user {}. Fetching existing user details.", supabaseUserId);
                 newUser = jdbcTemplate.queryForMap("""
@@ -802,74 +817,6 @@ public class ProfileService {
         return Map.of();
     }
 
-    private Map<String, Object> provisionLocalUserJit(UUID supabaseUserId, String email, String displayName, String authProvider) {
-        UUID userId = UUID.randomUUID();
-        log.info("JIT provisioning local database records for Supabase user: {} (email: {}, provider: {})", supabaseUserId, email, authProvider);
 
-        jdbcTemplate.update("""
-                insert into app_users (
-                    id,
-                    supabase_user_id,
-                    email,
-                    display_name,
-                    status,
-                    auth_provider,
-                    created_at,
-                    updated_at
-                )
-                values (
-                    :userId,
-                    :supabaseUserId,
-                    :email,
-                    :displayName,
-                    'ACTIVE',
-                    :authProvider,
-                    now(),
-                    now()
-                )
-                """, Map.of(
-                "userId", userId,
-                "supabaseUserId", supabaseUserId,
-                "email", email.toLowerCase().trim(),
-                "displayName", displayName,
-                "authProvider", authProvider
-        ));
-
-        jdbcTemplate.update("""
-                insert into user_roles (user_id, role_code)
-                values (:userId, 'candidate_free')
-                """, Map.of("userId", userId));
-
-        jdbcTemplate.update("""
-                insert into profiles (user_id, headline, visibility)
-                values (:userId, 'Ứng viên nextplease', '{}'::jsonb)
-                """, Map.of("userId", userId));
-
-        jdbcTemplate.update("""
-                insert into wallets (user_id, np_balance, locked_np_balance)
-                values (:userId, 0, 0)
-                """, Map.of("userId", userId));
-
-        jdbcTemplate.update("""
-                insert into audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
-                values (
-                    :userId,
-                    'candidate.jit_provisioned',
-                    'app_user',
-                    :userId,
-                    jsonb_build_object('provider', :authProvider)
-                )
-                """, Map.of(
-                "userId", userId,
-                "authProvider", authProvider
-        ));
-
-        return Map.of(
-                "id", userId,
-                "display_name", displayName,
-                "email", email,
-                "np_balance", 0L
-        );
-    }
 }
 
