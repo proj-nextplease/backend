@@ -126,7 +126,7 @@ public class QuestService {
 
     // ── Candidate: Search / Browse ────────────────────────────────────────────
 
-    public List<Map<String, Object>> searchQuests(String keyword, String category, int candidateRs) {
+    public List<Map<String, Object>> searchQuests(String keyword, String category, UUID companyId, int candidateRs) {
         String searchPattern = keyword != null && !keyword.isBlank()
                 ? "%" + keyword.trim().toLowerCase() + "%" : null;
         String sql = """
@@ -158,12 +158,14 @@ public class QuestService {
                   and (q.ends_at is null or q.ends_at > now())
                   and (:category::text is null or q.category = :category)
                   and (:keyword::text is null or lower(q.title) like :keyword or lower(q.description) like :keyword)
+                  and (:companyId::uuid is null or q.company_id = :companyId)
                 order by q.created_at desc
                 limit 50
                 """;
         List<Map<String, Object>> quests = jdbcTemplate.queryForList(sql, new MapSqlParameterSource()
                 .addValue("category", category)
-                .addValue("keyword", searchPattern));
+                .addValue("keyword", searchPattern)
+                .addValue("companyId", companyId));
         for (Map<String, Object> q : quests) {
             q.put("formFields", getQuestFormFields((UUID) q.get("id")));
         }

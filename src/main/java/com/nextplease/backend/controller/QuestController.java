@@ -31,13 +31,14 @@ public class QuestController {
 
     // ── Public / Candidate ────────────────────────────────────────────────────
 
-    /** GET /api/v1/quests?keyword=&category= */
+    /** GET /api/v1/quests?keyword=&category=&companyId= */
     @GetMapping("/quests")
     public ApiResponse<List<Map<String, Object>>> searchQuests(
             @RequestParam(required = false) String keyword,
-            @RequestParam(required = false) String category
+            @RequestParam(required = false) String category,
+            @RequestParam(required = false) UUID companyId
     ) {
-        return ApiResponse.success(questService.searchQuests(keyword, category, 0));
+        return ApiResponse.success(questService.searchQuests(keyword, category, companyId, 0));
     }
 
     /** GET /api/v1/quests/exp-config — live EXP-per-category for the create form */
