@@ -50,15 +50,31 @@ public class CompanyMembershipService {
             CompanyAccessService companyAccessService,
             EmailDeliveryService emailDeliveryService,
             SupabaseAdminService supabaseAdminService,
-            @Value("${app.frontend.base-url:http://localhost:5173}") String frontendBaseUrl
+            @Value("${app.frontend.base-url:http://localhost:5173}") String frontendBaseUrl,
+            @Value("${app.cors.allowed-origins:http://localhost:5173}") String allowedOrigins
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.companyAccessService = companyAccessService;
         this.emailDeliveryService = emailDeliveryService;
         this.supabaseAdminService = supabaseAdminService;
-        this.frontendBaseUrl = frontendBaseUrl.endsWith("/")
-                ? frontendBaseUrl.substring(0, frontendBaseUrl.length() - 1)
-                : frontendBaseUrl;
+
+        String resolvedBaseUrl = frontendBaseUrl;
+        if (resolvedBaseUrl.contains("localhost") || resolvedBaseUrl.contains("127.0.0.1")) {
+            if (allowedOrigins != null && !allowedOrigins.isBlank()) {
+                String[] origins = allowedOrigins.split(",");
+                for (String origin : origins) {
+                    origin = origin.trim();
+                    if (!origin.contains("localhost") && !origin.contains("127.0.0.1") && (origin.startsWith("http://") || origin.startsWith("https://"))) {
+                        resolvedBaseUrl = origin;
+                        break;
+                    }
+                }
+            }
+        }
+
+        this.frontendBaseUrl = resolvedBaseUrl.endsWith("/")
+                ? resolvedBaseUrl.substring(0, resolvedBaseUrl.length() - 1)
+                : resolvedBaseUrl;
     }
 
     // ── Members ────────────────────────────────────────────────────────────────
