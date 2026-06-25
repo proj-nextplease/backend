@@ -18,6 +18,7 @@ import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -37,19 +38,22 @@ public class ProfileService {
     private final ReputationService reputationService;
     private final ConfigService configService;
     private final UserJitProvisioningService userJitProvisioningService;
+    private final boolean jwtEnabled;
 
     public ProfileService(
             NamedParameterJdbcTemplate jdbcTemplate,
             ObjectMapper objectMapper,
             ReputationService reputationService,
             ConfigService configService,
-            UserJitProvisioningService userJitProvisioningService
+            UserJitProvisioningService userJitProvisioningService,
+            @Value("${app.security.jwt.enabled:false}") boolean jwtEnabled
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
         this.reputationService = reputationService;
         this.configService = configService;
         this.userJitProvisioningService = userJitProvisioningService;
+        this.jwtEnabled = jwtEnabled;
     }
 
     private HttpServletRequest getCurrentRequest() {
@@ -65,6 +69,10 @@ public class ProfileService {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication instanceof JwtAuthenticationToken jwtAuthenticationToken) {
             return UUID.fromString(jwtAuthenticationToken.getToken().getSubject());
+        }
+
+        if (jwtEnabled) {
+            throw new ResourceNotFoundException("Yêu cầu phiên đăng nhập Supabase đã xác thực.");
         }
 
         // Fallback for dev mode where APP_SECURITY_JWT_ENABLED = false
@@ -796,6 +804,10 @@ public class ProfileService {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication instanceof JwtAuthenticationToken jwtAuthenticationToken) {
             return jwtAuthenticationToken.getToken().getClaims();
+        }
+
+        if (jwtEnabled) {
+            return Map.of();
         }
 
         HttpServletRequest request = getCurrentRequest();
