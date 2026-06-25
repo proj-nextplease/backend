@@ -114,6 +114,7 @@ public class SecurityConfig {
         return Arrays.stream(corsProperties.allowedOrigins().split(","))
                 .map(String::trim)
                 .filter(origin -> !origin.isBlank())
+                .map(origin -> origin.replaceAll("/+$", ""))   // strip trailing slashes
                 .toList();
     }
 }
