@@ -210,7 +210,7 @@ public class AdminDashboardController {
      */
     @GetMapping("/jobs")
     public ApiResponse<List<Map<String, Object>>> getJobs() {
-        requireAdmin();
+        MeResponse admin = requireAdmin();
 
         List<Map<String, Object>> jobs = jdbcTemplate.queryForList("""
                 select j.id,
@@ -223,6 +223,7 @@ public class AdminDashboardController {
                        'JOB' as "postType",
                        ar.claimed_by_admin_id as "claimedByAdminId",
                        admin_u.display_name as "claimedByAdminName",
+                       (ar.claimed_by_admin_id is not null and ar.claimed_by_admin_id = :me) as "claimedByMe",
                        ar.claimed_at as "claimedAt",
                        ar.internal_notes as "internalNotes"
                 from jobs j
@@ -243,6 +244,7 @@ public class AdminDashboardController {
                        'QUEST' as "postType",
                        ar.claimed_by_admin_id as "claimedByAdminId",
                        admin_u.display_name as "claimedByAdminName",
+                       (ar.claimed_by_admin_id is not null and ar.claimed_by_admin_id = :me) as "claimedByMe",
                        ar.claimed_at as "claimedAt",
                        ar.internal_notes as "internalNotes"
                 from quests q
@@ -252,7 +254,7 @@ public class AdminDashboardController {
                 where q.deleted_at is null
 
                 order by "createdAt" desc
-                """, Map.of());
+                """, Map.of("me", admin.appUserId()));
 
         return ApiResponse.success(jobs);
     }
@@ -411,15 +413,15 @@ public class AdminDashboardController {
     /** GET /api/v1/admin/dashboard/verification-queue — all PENDING proof submissions */
     @GetMapping("/verification-queue")
     public ApiResponse<List<Map<String, Object>>> getVerificationQueue() {
-        requireAdmin();
-        return ApiResponse.success(credentialService.getPendingQueue());
+        MeResponse admin = requireAdmin();
+        return ApiResponse.success(credentialService.getPendingQueue(admin.appUserId()));
     }
 
     /** GET /api/v1/admin/dashboard/verification-queue/all — every submission, all statuses */
     @GetMapping("/verification-queue/all")
     public ApiResponse<List<Map<String, Object>>> getAllVerificationSubmissions() {
-        requireAdmin();
-        return ApiResponse.success(credentialService.getAllSubmissions());
+        MeResponse admin = requireAdmin();
+        return ApiResponse.success(credentialService.getAllSubmissions(admin.appUserId()));
     }
 
     /** POST /api/v1/admin/dashboard/verification-queue/{id}/approve */

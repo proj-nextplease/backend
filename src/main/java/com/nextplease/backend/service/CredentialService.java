@@ -269,7 +269,7 @@ public class CredentialService {
     }
 
     /** Admin fetch: all PENDING experiences across all users (newest first). */
-    public List<Map<String, Object>> getPendingQueue() {
+    public List<Map<String, Object>> getPendingQueue(UUID currentAdminId) {
         return jdbcTemplate.queryForList("""
                 select e.id,
                        e.project_name,
@@ -291,6 +291,7 @@ public class CredentialService {
                        p.current_level,
                        ar.claimed_by_admin_id as "claimedByAdminId",
                        admin_u.display_name as "claimedByAdminName",
+                       (ar.claimed_by_admin_id is not null and ar.claimed_by_admin_id = :me) as "claimedByMe",
                        ar.claimed_at as "claimedAt",
                        ar.internal_notes as "internalNotes"
                 from experiences e
@@ -301,11 +302,11 @@ public class CredentialService {
                 where e.verification_status = 'PENDING'
                   and e.deleted_at is null
                 order by e.express_verification desc, e.created_at asc
-                """, Map.of());
+                """, Map.of("me", currentAdminId));
     }
 
     /** Admin fetch: ALL submissions across all users, every status (newest first). */
-    public List<Map<String, Object>> getAllSubmissions() {
+    public List<Map<String, Object>> getAllSubmissions(UUID currentAdminId) {
         return jdbcTemplate.queryForList("""
                 select e.id,
                        e.project_name,
@@ -329,6 +330,7 @@ public class CredentialService {
                        p.current_level,
                        ar.claimed_by_admin_id as "claimedByAdminId",
                        admin_u.display_name as "claimedByAdminName",
+                       (ar.claimed_by_admin_id is not null and ar.claimed_by_admin_id = :me) as "claimedByMe",
                        ar.claimed_at as "claimedAt",
                        ar.internal_notes as "internalNotes"
                 from experiences e
@@ -338,7 +340,7 @@ public class CredentialService {
                 left join app_users admin_u on ar.claimed_by_admin_id = admin_u.id
                 where e.deleted_at is null
                 order by e.created_at desc
-                """, Map.of());
+                """, Map.of("me", currentAdminId));
     }
 
     // ── private helpers ──────────────────────────────────────────────────────
