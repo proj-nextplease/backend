@@ -46,16 +46,24 @@ public class WalletService {
             Object raw = jdbcTemplate.queryForObject(
                     "select premium_until from app_users where id = :userId",
                     Map.of("userId", userId), Object.class);
-            if (raw instanceof OffsetDateTime odt) {
-                premiumUntil = odt;
-            } else if (raw != null) {
-                premiumUntil = OffsetDateTime.parse(raw.toString());
-            }
+            premiumUntil = parseOffsetDateTime(raw);
         } catch (Exception e) {
-            log.warn("Could not parse premium_until for user {}: {}", userId, e.getMessage());
+            log.warn("Could not retrieve or parse premium_until for user {}: {}", userId, e.getMessage());
         }
 
         boolean isPremium = premiumUntil != null && premiumUntil.isAfter(OffsetDateTime.now(VN));
+
+        OffsetDateTime matchAlertUntil = null;
+        try {
+            Object raw = jdbcTemplate.queryForObject("""
+                    select expires_at from subscriptions
+                    where user_id = :userId and plan_code = 'job_match_alert_monthly'
+                      and status = 'ACTIVE' and expires_at > now()
+                    order by expires_at desc limit 1
+                    """, Map.of("userId", userId), Object.class);
+            matchAlertUntil = parseOffsetDateTime(raw);
+        } catch (Exception ignored) {}
+        boolean hasJobMatchAlert = matchAlertUntil != null && matchAlertUntil.isAfter(OffsetDateTime.now(VN));
 
         List<Map<String, Object>> recentTx = jdbcTemplate.queryForList("""
                 select id, amount_np, balance_after_np, transaction_type, reason, created_at
@@ -70,6 +78,8 @@ public class WalletService {
         result.put("lockedNpBalance", wallet.get("locked_np_balance"));
         result.put("isPremium", isPremium);
         result.put("premiumUntil", premiumUntil != null ? premiumUntil.toString() : null);
+        result.put("hasJobMatchAlert", hasJobMatchAlert);
+        result.put("jobMatchAlertUntil", matchAlertUntil != null ? matchAlertUntil.toString() : null);
         result.put("recentTransactions", recentTx);
         result.put("premiumPriceNp", premiumPriceNp());
         result.put("minTopupVnd", minTopupVnd());
@@ -187,8 +197,9 @@ public class WalletService {
             Object raw = jdbcTemplate.queryForObject(
                     "select premium_until from app_users where id = :userId",
                     Map.of("userId", userId), Object.class);
-            if (raw instanceof OffsetDateTime odt && odt.isAfter(now)) {
-                currentExpiry = odt;
+            OffsetDateTime parsed = parseOffsetDateTime(raw);
+            if (parsed != null && parsed.isAfter(now)) {
+                currentExpiry = parsed;
             }
         } catch (Exception ignored) {}
 
@@ -205,7 +216,8 @@ public class WalletService {
         jdbcTemplate.update("""
                 insert into subscriptions (user_id, plan_code, price_np, status, starts_at, expires_at)
                 values (:userId, :plan, :price, 'ACTIVE', now(), :expiry)
-                on conflict do nothing
+                on conflict (user_id, plan_code) where status = 'ACTIVE'
+                do update set expires_at = excluded.expires_at, updated_at = now()
                 """, new MapSqlParameterSource()
                 .addValue("userId", userId)
                 .addValue("plan", PREMIUM_PLAN)
@@ -239,6 +251,25 @@ public class WalletService {
                     Map.of("userId", userId));
         } catch (org.springframework.dao.EmptyResultDataAccessException e) {
             throw new ResourceNotFoundException("Ví NP chưa được khởi tạo cho tài khoản này.");
+        }
+    }
+
+    private OffsetDateTime parseOffsetDateTime(Object raw) {
+        if (raw == null) return null;
+        if (raw instanceof OffsetDateTime odt) {
+            return odt;
+        }
+        if (raw instanceof java.sql.Timestamp ts) {
+            return OffsetDateTime.ofInstant(ts.toInstant(), VN);
+        }
+        if (raw instanceof java.time.LocalDateTime ldt) {
+            return ldt.atZone(VN).toOffsetDateTime();
+        }
+        try {
+            return OffsetDateTime.parse(raw.toString());
+        } catch (Exception e) {
+            log.warn("Failed to parse date string {}: {}", raw, e.getMessage());
+            return null;
         }
     }
 }

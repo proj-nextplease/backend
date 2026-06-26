@@ -264,6 +264,7 @@ public class QuestService {
                     qa.reject_reason as "rejectReason",
                     qa.applied_at as "appliedAt",
                     qa.updated_at as "updatedAt",
+                    qa.boosted_until as "boostedUntil",
                     q.id          as "questId",
                     q.title       as "questTitle",
                     q.category,
@@ -404,6 +405,7 @@ public class QuestService {
                     qa.cover_note,
                     qa.custom_answers::text as custom_answers,
                     qa.applied_at as "appliedAt",
+                    qa.boosted_until as "boostedUntil",
                     u.id            as "candidateId",
                     u.display_name  as "candidateName",
                     u.email         as "candidateEmail",
@@ -419,7 +421,8 @@ public class QuestService {
                 join profiles p on p.user_id = u.id
                 left join schools s on s.id = p.school_id
                 where qa.quest_id = :questId
-                order by qa.applied_at asc
+                order by (case when qa.boosted_until > now() then 1 else 0 end) desc,
+                         qa.applied_at asc
                 """, Map.of("questId", questId));
     }
 
