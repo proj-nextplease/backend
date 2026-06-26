@@ -105,6 +105,33 @@ public class ApplicationService {
             }
         }
 
+        // 4b. Early Access gate (Job Match Alert subscription or general Premium)
+        Object createdAtRaw = job.get("created_at");
+        if (createdAtRaw != null) {
+            java.time.Instant createdAtInstant = null;
+            if (createdAtRaw instanceof java.sql.Timestamp ts) {
+                createdAtInstant = ts.toInstant();
+            } else if (createdAtRaw instanceof java.time.OffsetDateTime odt) {
+                createdAtInstant = odt.toInstant();
+            } else if (createdAtRaw instanceof java.time.Instant inst) {
+                createdAtInstant = inst;
+            }
+            if (createdAtInstant != null) {
+                int earlyAccessHours = configService.getInt("job_match_early_access_hours", 12);
+                java.time.Instant earlyAccessThreshold = java.time.Instant.now().minus(earlyAccessHours, java.time.temporal.ChronoUnit.HOURS);
+                if (createdAtInstant.isAfter(earlyAccessThreshold)) {
+                    boolean hasEarlyAccess = checkJobMatchAlertSubscribed(userId);
+                    if (!hasEarlyAccess) {
+                        throw new AppException(
+                                HttpStatus.PAYMENT_REQUIRED,
+                                String.format("Cơ hội này đang trong thời gian Xem sớm (%d giờ đầu). Đăng ký Job Match Alert để ứng tuyển ngay!", earlyAccessHours),
+                                "EARLY_ACCESS_REQUIRED"
+                        );
+                    }
+                }
+            }
+        }
+
         // 5. Snapshot eligibility at time of application
         String snapshot = buildSnapshot(myRs, candidate);
 
@@ -175,6 +202,7 @@ public class ApplicationService {
                     a.applied_at,
                     a.eligibility_snapshot,
                     a.custom_answers::text as custom_answers,
+                    a.boosted_until as "boostedUntil",
                     u.id            as candidate_id,
                     u.display_name  as candidate_name,
                     u.email         as candidate_email,
@@ -190,7 +218,7 @@ public class ApplicationService {
                 join profiles p on p.user_id = u.id
                 left join schools s on s.id = p.school_id
                 where a.job_id = :jobId
-                order by a.applied_at asc
+                order by (case when a.boosted_until > now() then 1 else 0 end) desc, a.applied_at asc
                 """, Map.of("jobId", jobId));
     }
 
@@ -311,6 +339,7 @@ public class ApplicationService {
                     a.reject_reason,
                     a.applied_at,
                     a.updated_at,
+                    a.boosted_until as "boostedUntil",
                     j.id            as job_id,
                     j.title         as job_title,
                     j.job_type,
@@ -365,7 +394,7 @@ public class ApplicationService {
     private Map<String, Object> fetchJobOrThrow(UUID jobId) {
         try {
             return jdbcTemplate.queryForMap("""
-                    select id, title, status, min_req_rs, requires_premium, company_id, deadline_at, created_by
+                    select id, title, status, min_req_rs, requires_premium, company_id, deadline_at, created_by, created_at
                     from jobs
                     where id = :id and deleted_at is null
                     """, Map.of("id", jobId));
@@ -402,6 +431,18 @@ public class ApplicationService {
                 from app_users
                 where id = :userId
                   and premium_until > now()
+                """, Map.of("userId", userId), Integer.class);
+        return count != null && count > 0;
+    }
+
+    private boolean checkJobMatchAlertSubscribed(UUID userId) {
+        if (checkPremium(userId)) {
+            return true;
+        }
+        Integer count = jdbcTemplate.queryForObject("""
+                select count(*) from subscriptions
+                where user_id = :userId and plan_code = 'job_match_alert_monthly'
+                  and status = 'ACTIVE' and expires_at > now()
                 """, Map.of("userId", userId), Integer.class);
         return count != null && count > 0;
     }

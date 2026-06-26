@@ -19,6 +19,8 @@ public record PortfolioResponse(
         int reputationScore,
         long totalExp,
         int currentLevel,
-        long npBalance
+        long npBalance,
+        String selectedTheme,
+        boolean themeUnlocked
 ) {
 }

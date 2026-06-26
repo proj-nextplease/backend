@@ -323,6 +323,7 @@ public class AdminDashboardController {
             }
 
             notifyPostOwner("quests", id, true, null);
+            notificationService.notifyMatchAlertSubscribers(id, true);
             return ApiResponse.success("Đã duyệt quest thành công!");
         }
 
@@ -339,6 +340,7 @@ public class AdminDashboardController {
         }
 
         notifyPostOwner("jobs", id, true, null);
+        notificationService.notifyMatchAlertSubscribers(id, false);
         return ApiResponse.success("Đã duyệt tin tuyển dụng thành công!");
     }
 

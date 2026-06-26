@@ -24,6 +24,8 @@ public record PublicPortfolioResponse(
         List<CredentialDto> credentials,
         int reputationScore,
         long totalExp,
-        int currentLevel
+        int currentLevel,
+        String selectedTheme,
+        boolean themeUnlocked
 ) {
 }

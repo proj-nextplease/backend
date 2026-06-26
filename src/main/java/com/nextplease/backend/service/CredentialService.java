@@ -48,19 +48,22 @@ public class CredentialService {
     private final ExpService expService;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
     private final NotificationService notificationService;
+    private final ConfigService configService;
 
     public CredentialService(
             NamedParameterJdbcTemplate jdbcTemplate,
             ReputationService reputationService,
             ExpService expService,
             com.fasterxml.jackson.databind.ObjectMapper objectMapper,
-            NotificationService notificationService
+            NotificationService notificationService,
+            ConfigService configService
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.reputationService = reputationService;
         this.expService = expService;
         this.objectMapper = objectMapper;
         this.notificationService = notificationService;
+        this.configService = configService;
     }
 
     /** Resolve the app_users id that owns a profile (notification recipient). */
@@ -118,13 +121,13 @@ public class CredentialService {
         return Map.of("experienceId", expId, "status", "PENDING");
     }
 
-    /** Returns all credential submissions for the current user (newest first). */
     public List<Map<String, Object>> getMySubmissions(UUID userId) {
         UUID profileId = getProfileIdOrThrow(userId);
         return jdbcTemplate.queryForList("""
                 select id, project_name, position, category, role_level,
                        description, proof_link, proof_images::text as proof_images, verification_status,
-                       reject_reason, started_at, ended_at, created_at
+                       reject_reason, started_at, ended_at, created_at,
+                       express_verification as "expressVerification"
                 from experiences
                 where profile_id = :profileId
                   and deleted_at is null
@@ -200,10 +203,69 @@ public class CredentialService {
         log.info("[CredentialService] Admin {} rejected experience {} reason={}",
                 adminUserId, experienceId, reason);
 
-        notificationService.notify(profileOwnerUserId((UUID) exp.get("profile_id")), "EXPERIENCE_REJECTED",
+        // Refund the Express Verification fee if it was paid — the express promise (verify
+        // in 24h) cannot be honored for a rejected experience, so the NP is returned.
+        boolean refunded = refundExpressFeeIfPaid(experienceId, exp);
+
+        UUID ownerUserId = profileOwnerUserId((UUID) exp.get("profile_id"));
+        String refundNote = refunded
+                ? " Phí Xác thực nhanh đã được hoàn lại vào ví NP của bạn."
+                : "";
+        notificationService.notify(ownerUserId, "EXPERIENCE_REJECTED",
                 "Kinh nghiệm chưa được duyệt",
-                "Kinh nghiệm \"" + exp.get("position") + "\" của bạn bị từ chối. Lý do: " + reason,
+                "Kinh nghiệm \"" + exp.get("position") + "\" của bạn bị từ chối. Lý do: " + reason + refundNote,
                 "/portfolio", true);
+    }
+
+    /**
+     * Refunds the Express Verification fee (idempotent) when a paid experience is rejected.
+     * Returns true if a refund was actually credited.
+     */
+    private boolean refundExpressFeeIfPaid(UUID experienceId, Map<String, Object> exp) {
+        Object expressRaw = exp.get("express_verification");
+        boolean wasExpress = expressRaw instanceof Boolean b && b;
+        if (!wasExpress) return false;
+
+        int price = configService.getInt("express_verification_price_np", 25000);
+        UUID profileId = (UUID) exp.get("profile_id");
+        UUID ownerUserId = profileOwnerUserId(profileId);
+        if (ownerUserId == null) return false;
+
+        try {
+            Map<String, Object> wallet = jdbcTemplate.queryForMap(
+                    "select id, np_balance from wallets where user_id = :userId for update",
+                    Map.of("userId", ownerUserId));
+            int balance = ((Number) wallet.get("np_balance")).intValue();
+            int newBalance = balance + price;
+
+            // Idempotent: unique idempotency_key prevents double refund for the same experience.
+            int inserted = jdbcTemplate.update("""
+                    insert into wallet_transactions (wallet_id, amount_np, balance_after_np, transaction_type, reason, source_type, source_id, idempotency_key)
+                    values (:walletId, :amount, :balanceAfter, 'REFUND', :reason, 'experience', :sourceId, :ikey)
+                    on conflict (idempotency_key) where idempotency_key is not null do nothing
+                    """, new MapSqlParameterSource()
+                    .addValue("walletId", wallet.get("id"))
+                    .addValue("amount", price)
+                    .addValue("balanceAfter", newBalance)
+                    .addValue("reason", String.format("Hoàn phí Xác thực nhanh (kinh nghiệm bị từ chối): %s", exp.get("project_name")))
+                    .addValue("sourceId", experienceId)
+                    .addValue("ikey", "express_refund_" + experienceId));
+
+            if (inserted == 0) {
+                // Already refunded previously — do not credit again.
+                return false;
+            }
+
+            jdbcTemplate.update("update wallets set np_balance = :balance, updated_at = now() where id = :walletId",
+                    Map.of("balance", newBalance, "walletId", wallet.get("id")));
+
+            log.info("[CredentialService] Refunded {} NP express fee for rejected experience {} to user {}",
+                    price, experienceId, ownerUserId);
+            return true;
+        } catch (org.springframework.dao.EmptyResultDataAccessException e) {
+            log.warn("[CredentialService] Cannot refund express fee — wallet not found for user {}", ownerUserId);
+            return false;
+        }
     }
 
     /** Admin fetch: all PENDING experiences across all users (newest first). */
@@ -221,6 +283,7 @@ public class CredentialService {
                        e.started_at,
                        e.ended_at,
                        e.created_at,
+                       e.express_verification as "expressVerification",
                        u.email         as candidate_email,
                        u.display_name  as candidate_name,
                        p.reputation_score,
@@ -237,7 +300,7 @@ public class CredentialService {
                 left join app_users admin_u on ar.claimed_by_admin_id = admin_u.id
                 where e.verification_status = 'PENDING'
                   and e.deleted_at is null
-                order by e.created_at asc
+                order by e.express_verification desc, e.created_at asc
                 """, Map.of());
     }
 
@@ -258,6 +321,7 @@ public class CredentialService {
                        e.started_at,
                        e.ended_at,
                        e.created_at,
+                       e.express_verification as "expressVerification",
                        u.email         as candidate_email,
                        u.display_name  as candidate_name,
                        p.reputation_score,

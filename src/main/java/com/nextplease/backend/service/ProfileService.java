@@ -195,7 +195,7 @@ public class ProfileService {
         Map<String, Object> profile;
         try {
             profile = jdbcTemplate.queryForMap("""
-                    select id, headline, bio, location, school_id, avatar_config, credentials, onboarding_completed, reputation_score, total_exp, current_level 
+                    select id, headline, bio, location, school_id, avatar_config, credentials, onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked 
                     from profiles where user_id = :userId
                     """, Map.of("userId", userId));
         } catch (EmptyResultDataAccessException e) {
@@ -207,7 +207,7 @@ public class ProfileService {
                     """, Map.of("id", profileId, "userId", userId));
 
             profile = jdbcTemplate.queryForMap("""
-                    select id, headline, bio, location, school_id, avatar_config, credentials, onboarding_completed, reputation_score, total_exp, current_level 
+                    select id, headline, bio, location, school_id, avatar_config, credentials, onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked 
                     from profiles where user_id = :userId
                     """, Map.of("userId", userId));
         }
@@ -264,6 +264,8 @@ public class ProfileService {
         long totalExp = profile.get("total_exp") != null ? ((Number) profile.get("total_exp")).longValue() : 0L;
         int currentLevel = profile.get("current_level") != null ? ((Number) profile.get("current_level")).intValue() : 1;
         long npBalance = user.get("np_balance") != null ? ((Number) user.get("np_balance")).longValue() : 0L;
+        String selectedTheme = profile.get("selected_theme") != null ? (String) profile.get("selected_theme") : "DEFAULT";
+        boolean themeUnlocked = profile.get("theme_unlocked") != null && (Boolean) profile.get("theme_unlocked");
 
         return new PortfolioResponse(
                 displayName,
@@ -279,7 +281,9 @@ public class ProfileService {
                 reputationScore,
                 totalExp,
                 currentLevel,
-                npBalance
+                npBalance,
+                selectedTheme,
+                themeUnlocked
         );
     }
 
@@ -302,7 +306,7 @@ public class ProfileService {
         try {
             profile = jdbcTemplate.queryForMap("""
                     select id, headline, bio, location, school_id, avatar_config, credentials::text as credentials,
-                           onboarding_completed, reputation_score, total_exp, current_level
+                           onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked
                     from profiles where user_id = :userId
                     """, Map.of("userId", userId));
         } catch (EmptyResultDataAccessException e) {
@@ -361,11 +365,14 @@ public class ProfileService {
         int reputationScore = profile.get("reputation_score") != null ? ((Number) profile.get("reputation_score")).intValue() : 0;
         long totalExp = profile.get("total_exp") != null ? ((Number) profile.get("total_exp")).longValue() : 0L;
         int currentLevel = profile.get("current_level") != null ? ((Number) profile.get("current_level")).intValue() : 1;
+        String selectedTheme = profile.get("selected_theme") != null ? (String) profile.get("selected_theme") : "DEFAULT";
+        boolean themeUnlocked = profile.get("theme_unlocked") != null && (Boolean) profile.get("theme_unlocked");
 
         return new PublicPortfolioResponse(
                 displayName, headline, schoolName, location, bio,
                 skills, avatarConfig, experiences, credentials,
-                reputationScore, totalExp, currentLevel
+                reputationScore, totalExp, currentLevel,
+                selectedTheme, themeUnlocked
         );
     }
 
