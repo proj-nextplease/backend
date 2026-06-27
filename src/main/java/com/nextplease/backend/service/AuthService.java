@@ -171,6 +171,41 @@ public class AuthService {
         );
     }
 
+    /**
+     * Logs the current user out: revokes their Supabase session (invalidating refresh
+     * tokens server-side) and records an audit entry. Best-effort — never throws so the
+     * client can always clear local state.
+     *
+     * @param appUserId        local app_users id of the caller (from the authenticated principal)
+     * @param userAccessToken  the caller's raw Supabase access token, used to revoke the session
+     */
+    @Transactional
+    public void logout(UUID appUserId, String userAccessToken) {
+        try {
+            supabaseAdminService.signOutUser(userAccessToken);
+        } catch (Exception e) {
+            log.warn("Non-fatal: Supabase logout failed for user {}: {}", appUserId, e.getMessage());
+        }
+
+        try {
+            jdbcTemplate.update("""
+                    insert into audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
+                    values (
+                        :userId,
+                        'user.logged_out',
+                        'app_user',
+                        :userId,
+                        jsonb_build_object('ip_address', :ipAddress)
+                    )
+                    """, Map.of(
+                    "userId", appUserId,
+                    "ipAddress", currentRequestIp()
+            ));
+        } catch (Exception e) {
+            log.warn("Failed to write logout audit log: {}", e.getMessage());
+        }
+    }
+
     /** Best-effort real client IP of the current HTTP request, for audit logging. */
     private String currentRequestIp() {
         if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attrs) {

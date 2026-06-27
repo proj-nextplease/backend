@@ -113,6 +113,32 @@ public class CurrentUserService {
         );
     }
 
+    /**
+     * Returns the current user only if they hold the given role in the database.
+     * Roles are read from {@code user_roles} (the authoritative source) rather than
+     * the JWT, because a token may be issued before {@code app_metadata.roles} is
+     * synced. Throws 403 otherwise.
+     */
+    @Transactional
+    public MeResponse requireRole(String role) {
+        MeResponse currentUser = getCurrentUser();
+        java.util.List<String> roles = jdbcTemplate.queryForList(
+                "select role_code from user_roles where user_id = :userId",
+                Map.of("userId", currentUser.appUserId()), String.class);
+        if (!roles.contains(role)) {
+            throw new com.nextplease.backend.exception.AppException(
+                    org.springframework.http.HttpStatus.FORBIDDEN,
+                    "Bạn không có quyền truy cập trang quản trị.");
+        }
+        return currentUser;
+    }
+
+    /** Convenience wrapper for the most common gate: admin-only endpoints. */
+    @Transactional
+    public MeResponse requireAdmin() {
+        return requireRole("admin");
+    }
+
     private UUID resolveSupabaseUserId() {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication instanceof JwtAuthenticationToken jwtAuthenticationToken) {

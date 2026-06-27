@@ -78,17 +78,7 @@ public class AdminDashboardController {
      * Throws 403 Forbidden if not authorized.
      */
     private MeResponse requireAdmin() {
-        MeResponse currentUser = currentUserService.getCurrentUser();
-        List<String> roles = jdbcTemplate.queryForList(
-                "select role_code from user_roles where user_id = :userId",
-                Map.of("userId", currentUser.appUserId()),
-                String.class
-        );
-        if (!roles.contains("admin")) {
-            throw new AppException(HttpStatus.FORBIDDEN,
-                    "Bạn không có quyền truy cập trang quản trị.");
-        }
-        return currentUser;
+        return currentUserService.requireAdmin();
     }
 
     /**

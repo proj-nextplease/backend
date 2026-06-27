@@ -27,6 +27,8 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 @EnableConfigurationProperties({AppCorsProperties.class, RateLimitProperties.class})
 public class SecurityConfig {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(SecurityConfig.class);
+
     private final AppCorsProperties corsProperties;
     private final boolean jwtEnabled;
     private final SupabaseJwtAuthenticationConverter jwtAuthenticationConverter;
@@ -54,6 +56,7 @@ public class SecurityConfig {
                 .addFilterAfter(rateLimitFilter, AuthorizationFilter.class);
 
         if (jwtEnabled) {
+            log.info("JWT security ENABLED — endpoints require a valid Supabase token.");
             http.authorizeHttpRequests(auth -> auth
                             .requestMatchers(HttpMethod.GET, "/api/v1/health").permitAll()
                             .requestMatchers(HttpMethod.GET, "/api/v1/jobs/**").permitAll()
@@ -74,6 +77,11 @@ public class SecurityConfig {
                     .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt
                             .jwtAuthenticationConverter(jwtAuthenticationConverter)));
         } else {
+            log.warn("================================================================");
+            log.warn("JWT security is DISABLED — every endpoint is PUBLIC (permitAll).");
+            log.warn("This is only safe for local development. Set APP_SECURITY_JWT_ENABLED=true");
+            log.warn("in any deployed environment.");
+            log.warn("================================================================");
             http.authorizeHttpRequests(auth -> auth.anyRequest().permitAll());
         }
 
