@@ -263,6 +263,36 @@ public class SupabaseAdminService {
         }
     }
 
+    /**
+     * Revokes the user's Supabase session globally (invalidates all refresh tokens)
+     * by calling GoTrue's logout endpoint with the user's own access token. Best-effort:
+     * failures are logged but never block the logout response.
+     */
+    public void signOutUser(String userAccessToken) {
+        if (!enabled) {
+            log.info("SupabaseAdminService disabled – skipping signOutUser.");
+            return;
+        }
+        if (userAccessToken == null || userAccessToken.isBlank()) {
+            return;
+        }
+        try {
+            restClient.post()
+                    .uri("/auth/v1/logout?scope=global")
+                    // Override the default service-role Authorization with the user's token —
+                    // GoTrue logout acts on the bearer it receives.
+                    .headers(headers -> headers.set("Authorization", "Bearer " + userAccessToken))
+                    .retrieve()
+                    .onStatus(HttpStatusCode::is4xxClientError, (req, res) ->
+                            log.warn("Supabase logout 4xx: {}", res.getStatusCode()))
+                    .onStatus(HttpStatusCode::is5xxServerError, (req, res) ->
+                            log.warn("Supabase logout 5xx: {}", res.getStatusCode()))
+                    .toBodilessEntity();
+        } catch (Exception e) {
+            log.warn("Best-effort Supabase logout failed: {}", e.getMessage());
+        }
+    }
+
     private String generateMockJwt(String email, UUID supabaseUserId) {
         String header = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}";
         String payload = String.format(
