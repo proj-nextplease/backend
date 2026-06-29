@@ -43,6 +43,23 @@ public class ExpService {
     }
 
     /**
+     * Total accumulated EXP required to be sitting exactly at the start of {@code level}.
+     * Level 1 starts at 0. Mirrors the threshold formula used by {@link #calculateLevel(long)}.
+     */
+    public long expToReachLevel(int level) {
+        long accumulated = 0;
+        for (int l = 1; l < level; l++) {
+            accumulated += (long) (100.0 * Math.pow(l, 1.2));
+        }
+        return accumulated;
+    }
+
+    /** EXP needed to advance from {@code level} to {@code level + 1}. */
+    public long expForLevelSpan(int level) {
+        return (long) (100.0 * Math.pow(level, 1.2));
+    }
+
+    /**
      * Add EXP to a profile, update total_exp and current_level.
      *
      * @param profileId  target profile
