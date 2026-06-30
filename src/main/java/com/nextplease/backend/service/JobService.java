@@ -25,13 +25,16 @@ public class JobService {
     private final CompanyAccessService companyAccessService;
     private final ConfigService configService;
     private final NotificationService notificationService;
+    private final ContentModerationService moderationService;
 
     public JobService(NamedParameterJdbcTemplate jdbcTemplate, CompanyAccessService companyAccessService,
-                      ConfigService configService, NotificationService notificationService) {
+                      ConfigService configService, NotificationService notificationService,
+                      ContentModerationService moderationService) {
         this.jdbcTemplate = jdbcTemplate;
         this.companyAccessService = companyAccessService;
         this.configService = configService;
         this.notificationService = notificationService;
+        this.moderationService = moderationService;
     }
 
     /**
@@ -85,15 +88,16 @@ public class JobService {
                 insert into jobs (
                     id, company_id, title, description, job_type, category, specialty,
                     compensation, min_req_rs, location, is_remote, capacity,
-                    deadline_at, banner_url, banner_pos, status, created_by, created_at, updated_at
+                    deadline_at, banner_url, banner_pos, status, created_by, content_flag, created_at, updated_at
                 )
                 values (
                     :id, :companyId, :title, :description, :jobType, :category, :specialty,
                     :compensation, :minReqRs, :location, :isRemote, :capacity,
-                    :deadlineAt, :bannerUrl, :bannerPos, 'PENDING', :userId, now(), now()
+                    :deadlineAt, :bannerUrl, :bannerPos, 'PENDING', :userId, :contentFlag, now(), now()
                 )
 
                 """, new MapSqlParameterSource()
+                .addValue("contentFlag", moderationService.containsProfanity(request.title() + " " + request.description()))
                 .addValue("bannerUrl", request.bannerUrl())
                 .addValue("bannerPos", request.bannerPos())
                 .addValue("id", jobId)
@@ -378,6 +382,7 @@ public class JobService {
                            j.banner_url as "bannerUrl",
                            j.banner_pos as "bannerPos",
                            j.status,
+                           j.content_flag as "contentFlag",
                            j.rejection_reason as "rejectionReason",
                            j.created_by,
                            c.name as "companyName",
@@ -409,6 +414,7 @@ public class JobService {
                                q.banner_url as "bannerUrl",
                                q.banner_pos as "bannerPos",
                                q.status,
+                               q.content_flag as "contentFlag",
                                q.rejection_reason as "rejectionReason",
                                q.created_by,
                                c.name as "companyName",

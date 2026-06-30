@@ -35,6 +35,7 @@ public class QuestService {
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
     private final ConfigService configService;
     private final NotificationService notificationService;
+    private final ContentModerationService moderationService;
 
     private static final Map<String, String> EXP_CONFIG_KEY = Map.of(
             "SMALL_EVENT", "exp_small_event",
@@ -50,7 +51,8 @@ public class QuestService {
                         CompanyAccessService companyAccessService,
                         com.fasterxml.jackson.databind.ObjectMapper objectMapper,
                         ConfigService configService,
-                        NotificationService notificationService) {
+                        NotificationService notificationService,
+                        ContentModerationService moderationService) {
         this.jdbcTemplate = jdbcTemplate;
         this.expService = expService;
         this.reputationService = reputationService;
@@ -58,6 +60,7 @@ public class QuestService {
         this.objectMapper = objectMapper;
         this.configService = configService;
         this.notificationService = notificationService;
+        this.moderationService = moderationService;
     }
 
     private int expForCategory(String category) {
@@ -332,12 +335,14 @@ public class QuestService {
         UUID questId = jdbcTemplate.queryForObject("""
                 insert into quests
                     (company_id, created_by, title, description, category, exp_reward, np_reward,
-                     min_req_rs, capacity, starts_at, ends_at, banner_url, banner_pos, status)
+                     min_req_rs, capacity, starts_at, ends_at, banner_url, banner_pos, status, content_flag)
                 values
                     (:companyId, :createdBy, :title, :description, :category, :expReward, :npReward,
-                     :minReqRs, :capacity, :startsAt::timestamptz, :endsAt::timestamptz, :bannerUrl, :bannerPos, 'PENDING')
+                     :minReqRs, :capacity, :startsAt::timestamptz, :endsAt::timestamptz, :bannerUrl, :bannerPos, 'PENDING', :contentFlag)
                 returning id
                 """, new MapSqlParameterSource()
+                .addValue("contentFlag", moderationService.containsProfanity(
+                        String.valueOf(request.get("title")) + " " + String.valueOf(request.get("description"))))
                 .addValue("companyId", companyId)
                 .addValue("createdBy", organizerUserId)
                 .addValue("title", request.get("title"))
