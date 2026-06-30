@@ -36,12 +36,12 @@ public class GamificationService {
                     "Đăng nhập để giữ chuỗi streak của bạn.", 1, 20, null),
             new QuestDef("DAILY_VIEW_OPPORTUNITIES", "DAILY", "Khám phá 3 cơ hội",
                     "Xem 3 tin tuyển dụng hoặc Quest phù hợp.", 3, 30, "VIEW_OPPORTUNITY"),
-            new QuestDef("DAILY_UPDATE_PROFILE", "DAILY", "Trau chuốt hồ sơ",
-                    "Cập nhật thông tin, kỹ năng hoặc minh chứng.", 1, 30, "UPDATE_PROFILE"),
+            new QuestDef("DAILY_APPLY", "DAILY", "Ứng tuyển 1 cơ hội hôm nay",
+                    "Gửi 1 đơn ứng tuyển việc làm hoặc Quest.", 1, 30, "APPLY"),
             new QuestDef("WEEKLY_APPLY", "WEEKLY", "Ứng tuyển 3 cơ hội",
                     "Gửi 3 đơn ứng tuyển trong tuần này.", 3, 150, "APPLY"),
-            new QuestDef("WEEKLY_PROOF", "WEEKLY", "Nộp 1 minh chứng mới",
-                    "Đăng tải một proof / chứng chỉ mới.", 1, 200, "SUBMIT_PROOF")
+            new QuestDef("WEEKLY_PROOF", "WEEKLY", "Có 1 minh chứng được duyệt",
+                    "Một minh chứng của bạn được admin xác thực.", 1, 200, "SUBMIT_PROOF")
     );
 
     private final NamedParameterJdbcTemplate jdbc;

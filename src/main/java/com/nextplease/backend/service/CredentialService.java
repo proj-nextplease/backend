@@ -49,6 +49,7 @@ public class CredentialService {
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
     private final NotificationService notificationService;
     private final ConfigService configService;
+    private final GamificationService gamificationService;
 
     public CredentialService(
             NamedParameterJdbcTemplate jdbcTemplate,
@@ -56,7 +57,8 @@ public class CredentialService {
             ExpService expService,
             com.fasterxml.jackson.databind.ObjectMapper objectMapper,
             NotificationService notificationService,
-            ConfigService configService
+            ConfigService configService,
+            GamificationService gamificationService
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.reputationService = reputationService;
@@ -64,6 +66,7 @@ public class CredentialService {
         this.objectMapper = objectMapper;
         this.notificationService = notificationService;
         this.configService = configService;
+        this.gamificationService = gamificationService;
     }
 
     /** Resolve the app_users id that owns a profile (notification recipient). */
@@ -172,10 +175,18 @@ public class CredentialService {
         log.info("[CredentialService] Admin {} approved experience {} → +{} EXP, +{} RS, profile {}",
                 adminUserId, experienceId, expPoints, rsPoints, profileId);
 
-        notificationService.notify(profileOwnerUserId(profileId), "EXPERIENCE_APPROVED",
+        UUID ownerUserId = profileOwnerUserId(profileId);
+        notificationService.notify(ownerUserId, "EXPERIENCE_APPROVED",
                 "Kinh nghiệm đã được xác thực ✅",
                 "Kinh nghiệm \"" + exp.get("position") + "\" của bạn đã được duyệt: +" + expPoints + " EXP, +" + rsPoints + " RS.",
                 "/portfolio", true);
+
+        // Nhiệm vụ tuần "minh chứng được duyệt" chỉ tính khi admin DUYỆT (non-blocking).
+        try {
+            gamificationService.recordEvent(ownerUserId, "SUBMIT_PROOF", 1);
+        } catch (Exception ignored) {
+            // Gamification không bao giờ được phép làm hỏng luồng duyệt.
+        }
     }
 
     /** Admin rejects an experience. */

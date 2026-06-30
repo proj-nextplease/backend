@@ -8,8 +8,10 @@ spring:
     hikari:
       # Pool sized to survive bursts/spam without instantly exhausting connections.
       # Keep <= Postgres/Supabase max_connections divided by the number of app instances.
-      maximum-pool-size: ${DB_MAX_POOL_SIZE:10}
-      minimum-idle: ${DB_MIN_IDLE:2}
+      # Supabase session-mode pooler (port 5432) caps total clients at ~15.
+      # Keep this small so one app instance + leftover connections stay under the cap.
+      maximum-pool-size: ${DB_MAX_POOL_SIZE:5}
+      minimum-idle: ${DB_MIN_IDLE:1}
       connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:10000}
       connection-init-sql: SET TIME ZONE 'Asia/Ho_Chi_Minh'
       # Recycle/validate connections so a laptop sleep or Supabase idle-close
