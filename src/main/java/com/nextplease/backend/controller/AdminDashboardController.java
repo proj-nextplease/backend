@@ -140,6 +140,40 @@ public class AdminDashboardController {
         stats.put("totalQuests", totalQuests != null ? totalQuests : 0);
         stats.put("totalLogs", totalLogs != null ? totalLogs : 0);
 
+        // Breakdown: tin tuyển dụng theo trạng thái
+        Map<String, Integer> jobsByStatus = new java.util.LinkedHashMap<>();
+        for (Map<String, Object> r : jdbcTemplate.queryForList(
+                "select status, count(*) as c from jobs where deleted_at is null group by status", Map.of())) {
+            jobsByStatus.put((String) r.get("status"), ((Number) r.get("c")).intValue());
+        }
+        stats.put("jobsByStatus", jobsByStatus);
+
+        // Breakdown: quest theo trạng thái
+        Map<String, Integer> questsByStatus = new java.util.LinkedHashMap<>();
+        for (Map<String, Object> r : jdbcTemplate.queryForList(
+                "select status, count(*) as c from quests where deleted_at is null group by status", Map.of())) {
+            questsByStatus.put((String) r.get("status"), ((Number) r.get("c")).intValue());
+        }
+        stats.put("questsByStatus", questsByStatus);
+
+        // Xu hướng: người dùng mới 7 ngày gần nhất (theo giờ VN)
+        Map<String, Integer> signupMap = new java.util.HashMap<>();
+        for (Map<String, Object> r : jdbcTemplate.queryForList(
+                "select to_char(created_at at time zone 'Asia/Ho_Chi_Minh','YYYY-MM-DD') as d, count(*) as c " +
+                "from app_users where created_at >= now() - interval '7 days' group by d", Map.of())) {
+            signupMap.put((String) r.get("d"), ((Number) r.get("c")).intValue());
+        }
+        java.util.List<Map<String, Object>> signupsLast7Days = new java.util.ArrayList<>();
+        java.time.LocalDate today = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Ho_Chi_Minh"));
+        for (int i = 6; i >= 0; i--) {
+            String key = today.minusDays(i).toString();
+            Map<String, Object> m = new java.util.LinkedHashMap<>();
+            m.put("date", key);
+            m.put("count", signupMap.getOrDefault(key, 0));
+            signupsLast7Days.add(m);
+        }
+        stats.put("signupsLast7Days", signupsLast7Days);
+
         return ApiResponse.success(stats);
     }
 
