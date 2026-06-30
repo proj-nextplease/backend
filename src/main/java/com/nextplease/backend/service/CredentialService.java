@@ -50,6 +50,7 @@ public class CredentialService {
     private final NotificationService notificationService;
     private final ConfigService configService;
     private final GamificationService gamificationService;
+    private final ContentModerationService moderationService;
 
     public CredentialService(
             NamedParameterJdbcTemplate jdbcTemplate,
@@ -58,7 +59,8 @@ public class CredentialService {
             com.fasterxml.jackson.databind.ObjectMapper objectMapper,
             NotificationService notificationService,
             ConfigService configService,
-            GamificationService gamificationService
+            GamificationService gamificationService,
+            ContentModerationService moderationService
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.reputationService = reputationService;
@@ -67,6 +69,7 @@ public class CredentialService {
         this.notificationService = notificationService;
         this.configService = configService;
         this.gamificationService = gamificationService;
+        this.moderationService = moderationService;
     }
 
     /** Resolve the app_users id that owns a profile (notification recipient). */
@@ -92,15 +95,17 @@ public class CredentialService {
                 insert into experiences (
                     profile_id, project_name, position, category, role_level,
                     description, proof_link, proof_images, started_at, ended_at,
-                    verification_status, source, created_at, updated_at
+                    verification_status, source, content_flag, created_at, updated_at
                 ) values (
                     :profileId, :projectName, :position, :category, :roleLevel,
                     :description, :proofLink, :proofImages::jsonb,
                     cast(:startedAt as date), cast(:endedAt as date),
-                    'PENDING', 'CREDENTIAL', now(), now()
+                    'PENDING', 'CREDENTIAL', :contentFlag, now(), now()
                 )
                 returning id
                 """, new MapSqlParameterSource()
+                .addValue("contentFlag", moderationService.containsProfanity(
+                        req.projectName() + " " + req.position() + " " + req.description()))
                 .addValue("profileId", profileId)
                 .addValue("projectName", req.projectName())
                 .addValue("position", req.position())
@@ -295,6 +300,7 @@ public class CredentialService {
                        e.ended_at,
                        e.created_at,
                        e.express_verification as "expressVerification",
+                       e.content_flag as "contentFlag",
                        u.email         as candidate_email,
                        u.display_name  as candidate_name,
                        p.reputation_score,
@@ -334,6 +340,7 @@ public class CredentialService {
                        e.ended_at,
                        e.created_at,
                        e.express_verification as "expressVerification",
+                       e.content_flag as "contentFlag",
                        u.email         as candidate_email,
                        u.display_name  as candidate_name,
                        p.reputation_score,
