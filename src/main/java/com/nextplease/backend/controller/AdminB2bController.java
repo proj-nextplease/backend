@@ -82,6 +82,13 @@ public class AdminB2bController {
         return ApiResponse.success(list);
     }
 
+    @GetMapping("/approved")
+    public ApiResponse<List<Map<String, Object>>> getApprovedRegistrations() {
+        requireAdmin();
+        List<Map<String, Object>> list = adminB2bService.getApprovedRegistrations();
+        return ApiResponse.success(list);
+    }
+
     @PostMapping("/approve/{companyId}")
     public ApiResponse<String> approveB2b(@PathVariable UUID companyId) {
         MeResponse currentAdmin = requireAdmin();

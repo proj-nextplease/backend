@@ -107,8 +107,13 @@ public class AdminDashboardController {
                 Integer.class
         );
 
+        // Đếm ĐÚNG bằng định nghĩa của hàng chờ duyệt thật (xem AdminB2bService.getPendingRegistrations):
+        // chỉ tính công ty PENDING đã thực sự nộp hồ sơ và có chủ sở hữu, bỏ qua các bản ghi rỗng/nháp.
         Integer totalPendingB2b = jdbcTemplate.queryForObject(
-                "select count(*) from companies where verification_status = 'PENDING'",
+                "select count(*) from companies c " +
+                "join app_users u on c.owner_user_id = u.id " +
+                "where c.verification_status = 'PENDING' " +
+                "  and (c.tax_code is not null or c.document_url is not null or c.representative_name is not null)",
                 Map.of(),
                 Integer.class
         );
@@ -174,7 +179,99 @@ public class AdminDashboardController {
         }
         stats.put("signupsLast7Days", signupsLast7Days);
 
+        // So sánh: người dùng mới 7 ngày trước đó (để tính % tăng trưởng)
+        Integer signupsPrevious7Days = jdbcTemplate.queryForObject(
+                "select count(*) from app_users " +
+                "where created_at >= now() - interval '14 days' and created_at < now() - interval '7 days'",
+                Map.of(),
+                Integer.class
+        );
+        stats.put("signupsPrevious7Days", signupsPrevious7Days != null ? signupsPrevious7Days : 0);
+
+        // Tăng trưởng theo kỳ: số bản ghi MỚI trong 7 ngày gần nhất so với 7 ngày liền trước.
+        // FE dùng cặp {last7, prev7} này để hiển thị mũi tên +/-% trên từng thẻ KPI.
+        Map<String, Object> deltas = new java.util.LinkedHashMap<>();
+        deltas.put("candidates", growthWindow(
+                "app_users u join user_roles ur on ur.user_id = u.id " +
+                "where ur.role_code in ('candidate_free','candidate_premium')", "u.created_at", true));
+        deltas.put("companies", growthWindow(
+                "companies where company_type = 'SME'", "created_at", false));
+        deltas.put("clubs", growthWindow(
+                "companies where company_type = 'CLUB'", "created_at", false));
+        deltas.put("jobs", growthWindow(
+                "jobs where deleted_at is null", "created_at", false));
+        deltas.put("quests", growthWindow(
+                "quests where deleted_at is null", "created_at", false));
+        stats.put("deltas", deltas);
+
         return ApiResponse.success(stats);
+    }
+
+    /**
+     * Đếm số bản ghi mới trong 7 ngày gần nhất và 7 ngày liền trước đó cho một
+     * bảng/điều kiện bất kỳ, trả về {@code {last7, prev7}} để FE tính % tăng trưởng.
+     *
+     * @param fromWhere phần "table [join...] where <điều kiện>" (không gồm ràng buộc thời gian)
+     * @param tsColumn  cột thời gian dùng để so sánh (vd "created_at" hoặc "u.created_at")
+     * @param distinctUser đếm distinct u.id (dùng khi join làm nhân bản dòng), ngược lại count(*)
+     */
+    private Map<String, Integer> growthWindow(String fromWhere, String tsColumn, boolean distinctUser) {
+        String countExpr = distinctUser ? "count(distinct u.id)" : "count(*)";
+        Integer last7 = jdbcTemplate.queryForObject(
+                "select " + countExpr + " from " + fromWhere +
+                        " and " + tsColumn + " >= now() - interval '7 days'",
+                Map.of(), Integer.class);
+        Integer prev7 = jdbcTemplate.queryForObject(
+                "select " + countExpr + " from " + fromWhere +
+                        " and " + tsColumn + " >= now() - interval '14 days'" +
+                        " and " + tsColumn + " < now() - interval '7 days'",
+                Map.of(), Integer.class);
+        Map<String, Integer> m = new java.util.LinkedHashMap<>();
+        m.put("last7", last7 != null ? last7 : 0);
+        m.put("prev7", prev7 != null ? prev7 : 0);
+        return m;
+    }
+
+    /**
+     * GET /api/v1/admin/dashboard/health
+     * Trạng thái vận hành thời gian thực cho dashboard: kết nối DB, phiên bản
+     * migration Flyway hiện tại, và thời gian hoạt động của tiến trình.
+     */
+    @GetMapping("/health")
+    public ApiResponse<Map<String, Object>> getHealth() {
+        requireAdmin();
+
+        Map<String, Object> health = new java.util.LinkedHashMap<>();
+
+        boolean dbUp;
+        try {
+            Integer ping = jdbcTemplate.queryForObject("select 1", Map.of(), Integer.class);
+            dbUp = ping != null && ping == 1;
+        } catch (Exception e) {
+            dbUp = false;
+            log.warn("DB health ping failed: {}", e.getMessage());
+        }
+        health.put("dbUp", dbUp);
+
+        String migrationVersion = null;
+        boolean migrationsOk = false;
+        try {
+            Map<String, Object> mig = jdbcTemplate.queryForMap(
+                    "select version, success from flyway_schema_history " +
+                    "where version is not null order by installed_rank desc limit 1", Map.of());
+            migrationVersion = String.valueOf(mig.get("version"));
+            Object ok = mig.get("success");
+            migrationsOk = Boolean.TRUE.equals(ok) || "t".equals(String.valueOf(ok)) || "true".equalsIgnoreCase(String.valueOf(ok));
+        } catch (Exception e) {
+            log.warn("Flyway health lookup failed: {}", e.getMessage());
+        }
+        health.put("migrationVersion", migrationVersion);
+        health.put("migrationsOk", migrationsOk);
+
+        long uptimeMs = java.lang.management.ManagementFactory.getRuntimeMXBean().getUptime();
+        health.put("uptimeSeconds", uptimeMs / 1000);
+
+        return ApiResponse.success(health);
     }
 
     /**
@@ -246,6 +343,8 @@ public class AdminDashboardController {
                        c.name as "companyName",
                        c.company_type as "companyType",
                        'JOB' as "postType",
+                       j.capacity as "capacity",
+                       j.deadline_at as "deadlineAt",
                        ar.claimed_by_admin_id as "claimedByAdminId",
                        admin_u.display_name as "claimedByAdminName",
                        (ar.claimed_by_admin_id is not null and ar.claimed_by_admin_id = :me) as "claimedByMe",
@@ -268,6 +367,8 @@ public class AdminDashboardController {
                        c.name as "companyName",
                        c.company_type as "companyType",
                        'QUEST' as "postType",
+                       q.capacity as "capacity",
+                       q.ends_at as "deadlineAt",
                        ar.claimed_by_admin_id as "claimedByAdminId",
                        admin_u.display_name as "claimedByAdminName",
                        (ar.claimed_by_admin_id is not null and ar.claimed_by_admin_id = :me) as "claimedByMe",
