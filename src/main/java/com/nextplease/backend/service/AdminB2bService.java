@@ -63,6 +63,42 @@ public class AdminB2bService {
                 """, Map.of());
     }
 
+    public List<Map<String, Object>> getApprovedRegistrations() {
+        log.info("Fetching all approved B2B registrations for admin archive");
+        return jdbcTemplate.queryForList("""
+                select c.id,
+                       c.owner_user_id as "ownerUserId",
+                       c.name,
+                       c.company_type as "companyType",
+                       c.description,
+                       c.website_url as "websiteUrl",
+                       c.logo_url as "logoUrl",
+                       c.document_url as "documentUrl",
+                       c.tax_code as "taxCode",
+                       c.representative_name as "representativeName",
+                       c.representative_phone as "representativePhone",
+                       c.school_id as "schoolId",
+                       c.fanpage_url as "fanpageUrl",
+                       c.advisor_contact as "advisorContact",
+                       c.verification_status as "verificationStatus",
+                       c.created_at as "createdAt",
+                       u.email as "ownerEmail",
+                       s.name as "schoolName",
+                       ar.claimed_by_admin_id as "claimedByAdminId",
+                       admin_u.display_name as "claimedByAdminName",
+                       ar.claimed_at as "claimedAt",
+                       ar.internal_notes as "internalNotes"
+                from companies c
+                join app_users u on c.owner_user_id = u.id
+                left join schools s on c.school_id = s.id
+                left join admin_reviews ar on ar.item_id = c.id and ar.item_type = 'B2B_PARTNER'
+                left join app_users admin_u on ar.claimed_by_admin_id = admin_u.id
+                where c.verification_status = 'APPROVED'
+                order by c.updated_at desc
+                """, Map.of());
+    }
+
+
     @Transactional
     public void approveB2b(UUID companyId, UUID adminUserId) {
         log.info("Approving B2B company/club with id: {} by admin: {}", companyId, adminUserId);
