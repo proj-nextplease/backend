@@ -20,9 +20,12 @@ public record PortfolioRequest(
         
         @Valid
         List<ExperienceDto> experiences,
-        
+
         @Valid
-        List<CredentialDto> credentials
+        List<CredentialDto> credentials,
+
+        Boolean openToWork,
+        Map<String, Object> socialLinks
 ) {
 }
 

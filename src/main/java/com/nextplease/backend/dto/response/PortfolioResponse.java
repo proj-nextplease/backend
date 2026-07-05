@@ -21,6 +21,8 @@ public record PortfolioResponse(
         int currentLevel,
         long npBalance,
         String selectedTheme,
-        boolean themeUnlocked
+        boolean themeUnlocked,
+        boolean openToWork,
+        Map<String, Object> socialLinks
 ) {
 }

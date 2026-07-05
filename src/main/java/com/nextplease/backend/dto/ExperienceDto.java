@@ -24,6 +24,15 @@ public record ExperienceDto(
 
         String roleLevel,
 
-        String proofLink
+        String proofLink,
+
+        // Verified-portfolio surface: whether this item was approved by an admin,
+        // and the EXP/RS it is worth. Populated by ProfileService for display only;
+        // ignored on inbound requests.
+        Boolean verified,
+
+        Integer expReward,
+
+        Integer rsReward
 ) {
 }
