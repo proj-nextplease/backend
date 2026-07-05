@@ -30,18 +30,6 @@ public class CredentialService {
 
     private static final Logger log = LoggerFactory.getLogger(CredentialService.class);
 
-    private static final Map<String, Integer> EXP_BY_CATEGORY = Map.of(
-            "CLUB_SMALL", 100,
-            "SCHOOL_CAMPAIGN", 300,
-            "COMPANY_PROJECT", 500,
-            "SHORT_INTERNSHIP", 500,
-            "FREELANCE_GIG", 500
-    );
-
-    private static final Map<String, Integer> RS_BY_ROLE = Map.of(
-            "MEMBER", 5,
-            "LEADER", 10
-    );
 
     private final NamedParameterJdbcTemplate jdbcTemplate;
     private final ReputationService reputationService;
@@ -153,8 +141,8 @@ public class CredentialService {
         String category = (String) exp.get("category");
         String roleLevel = (String) exp.get("role_level");
 
-        int expPoints = EXP_BY_CATEGORY.getOrDefault(category, 100);
-        int rsPoints = RS_BY_ROLE.getOrDefault(roleLevel, 5);
+        int expPoints = ExperienceRewards.expFor(category);
+        int rsPoints = ExperienceRewards.rsFor(roleLevel);
         String reasonCode = "EXPERIENCE_APPROVED_" + category;
 
         // Mark experience approved
@@ -392,15 +380,15 @@ public class CredentialService {
     }
 
     private void validateCategory(String category) {
-        if (!EXP_BY_CATEGORY.containsKey(category)) {
+        if (!ExperienceRewards.isValidCategory(category)) {
             throw new AppException(HttpStatus.BAD_REQUEST,
                     "Loại hình không hợp lệ: " + category +
-                    ". Cho phép: " + String.join(", ", EXP_BY_CATEGORY.keySet()));
+                    ". Cho phép: " + String.join(", ", ExperienceRewards.categories()));
         }
     }
 
     private void validateRoleLevel(String roleLevel) {
-        if (!RS_BY_ROLE.containsKey(roleLevel)) {
+        if (!ExperienceRewards.isValidRole(roleLevel)) {
             throw new AppException(HttpStatus.BAD_REQUEST,
                     "Vai trò không hợp lệ: " + roleLevel + ". Cho phép: MEMBER, LEADER");
         }

@@ -195,7 +195,7 @@ public class ProfileService {
         Map<String, Object> profile;
         try {
             profile = jdbcTemplate.queryForMap("""
-                    select id, headline, bio, location, school_id, avatar_config, credentials, onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked 
+                    select id, headline, bio, location, school_id, avatar_config, credentials, onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked, open_to_work, social_links
                     from profiles where user_id = :userId
                     """, Map.of("userId", userId));
         } catch (EmptyResultDataAccessException e) {
@@ -207,7 +207,7 @@ public class ProfileService {
                     """, Map.of("id", profileId, "userId", userId));
 
             profile = jdbcTemplate.queryForMap("""
-                    select id, headline, bio, location, school_id, avatar_config, credentials, onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked 
+                    select id, headline, bio, location, school_id, avatar_config, credentials, onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked, open_to_work, social_links
                     from profiles where user_id = :userId
                     """, Map.of("userId", userId));
         }
@@ -243,7 +243,7 @@ public class ProfileService {
         // 6. Get experiences
         List<ExperienceDto> experiences = jdbcTemplate.query("""
                 select id, project_name, position, description, started_at, ended_at, proof_images::text as proof_images,
-                       category, role_level, proof_link from experiences
+                       category, role_level, proof_link, verification_status from experiences
                 where profile_id = :profileId
                 order by created_at asc
                 """, Map.of("profileId", profileId), (rs, rowNum) -> new ExperienceDto(
@@ -256,7 +256,10 @@ public class ProfileService {
                         deserializeImages(rs.getString("proof_images")),
                         rs.getString("category"),
                         rs.getString("role_level"),
-                        rs.getString("proof_link")
+                        rs.getString("proof_link"),
+                        "APPROVED".equals(rs.getString("verification_status")),
+                        ExperienceRewards.expFor(rs.getString("category")),
+                        ExperienceRewards.rsFor(rs.getString("role_level"))
                 ));
 
         boolean onboardingCompleted = profile.get("onboarding_completed") != null && (Boolean) profile.get("onboarding_completed");
@@ -266,6 +269,8 @@ public class ProfileService {
         long npBalance = user.get("np_balance") != null ? ((Number) user.get("np_balance")).longValue() : 0L;
         String selectedTheme = profile.get("selected_theme") != null ? (String) profile.get("selected_theme") : "DEFAULT";
         boolean themeUnlocked = profile.get("theme_unlocked") != null && (Boolean) profile.get("theme_unlocked");
+        boolean openToWork = profile.get("open_to_work") != null && (Boolean) profile.get("open_to_work");
+        Map<String, Object> socialLinks = parseJsonMap(getJsonString(profile.get("social_links")));
 
         return new PortfolioResponse(
                 displayName,
@@ -283,7 +288,9 @@ public class ProfileService {
                 currentLevel,
                 npBalance,
                 selectedTheme,
-                themeUnlocked
+                themeUnlocked,
+                openToWork,
+                socialLinks
         );
     }
 
@@ -306,7 +313,8 @@ public class ProfileService {
         try {
             profile = jdbcTemplate.queryForMap("""
                     select id, headline, bio, location, school_id, avatar_config, credentials::text as credentials,
-                           onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked
+                           onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked,
+                           open_to_work, social_links::text as social_links
                     from profiles where user_id = :userId
                     """, Map.of("userId", userId));
         } catch (EmptyResultDataAccessException e) {
@@ -359,7 +367,10 @@ public class ProfileService {
                         deserializeImages(rs.getString("proof_images")),
                         rs.getString("category"),
                         rs.getString("role_level"),
-                        rs.getString("proof_link")
+                        rs.getString("proof_link"),
+                        true,
+                        ExperienceRewards.expFor(rs.getString("category")),
+                        ExperienceRewards.rsFor(rs.getString("role_level"))
                 ));
 
         int reputationScore = profile.get("reputation_score") != null ? ((Number) profile.get("reputation_score")).intValue() : 0;
@@ -367,12 +378,15 @@ public class ProfileService {
         int currentLevel = profile.get("current_level") != null ? ((Number) profile.get("current_level")).intValue() : 1;
         String selectedTheme = profile.get("selected_theme") != null ? (String) profile.get("selected_theme") : "DEFAULT";
         boolean themeUnlocked = profile.get("theme_unlocked") != null && (Boolean) profile.get("theme_unlocked");
+        boolean openToWork = profile.get("open_to_work") != null && (Boolean) profile.get("open_to_work");
+        Map<String, Object> socialLinks = parseJsonMap(getJsonString(profile.get("social_links")));
 
         return new PublicPortfolioResponse(
                 displayName, headline, schoolName, location, bio,
                 skills, avatarConfig, experiences, credentials,
                 reputationScore, totalExp, currentLevel,
-                selectedTheme, themeUnlocked
+                selectedTheme, themeUnlocked,
+                openToWork, socialLinks
         );
     }
 
@@ -487,6 +501,7 @@ public class ProfileService {
         // 5. Serialize JSON columns
         String avatarConfigJson = serializeJson(request.avatar() != null ? request.avatar() : Map.of());
         String credentialsJson = serializeJson(request.credentials() != null ? request.credentials() : List.of());
+        String socialLinksJson = serializeJson(request.socialLinks() != null ? request.socialLinks() : Map.of());
 
         // 6. Update profile columns
         jdbcTemplate.update("""
@@ -497,6 +512,8 @@ public class ProfileService {
                     school_id = :schoolId,
                     avatar_config = cast(:avatarConfig as jsonb),
                     credentials = cast(:credentials as jsonb),
+                    open_to_work = :openToWork,
+                    social_links = cast(:socialLinks as jsonb),
                     onboarding_completed = case when :isDraft = true then onboarding_completed else true end,
                     updated_at = now()
                 where id = :profileId
@@ -507,6 +524,8 @@ public class ProfileService {
                 .addValue("schoolId", schoolId)
                 .addValue("avatarConfig", avatarConfigJson)
                 .addValue("credentials", credentialsJson)
+                .addValue("openToWork", request.openToWork() != null && request.openToWork())
+                .addValue("socialLinks", socialLinksJson)
                 .addValue("profileId", profileId)
                 .addValue("isDraft", isDraft));
 

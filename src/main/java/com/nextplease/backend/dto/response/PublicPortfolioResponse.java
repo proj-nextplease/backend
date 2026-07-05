@@ -26,6 +26,8 @@ public record PublicPortfolioResponse(
         long totalExp,
         int currentLevel,
         String selectedTheme,
-        boolean themeUnlocked
+        boolean themeUnlocked,
+        boolean openToWork,
+        Map<String, Object> socialLinks
 ) {
 }
