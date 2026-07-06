@@ -5,6 +5,7 @@ import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -41,20 +42,24 @@ public class NotificationService {
      */
     public void notify(UUID userId, String type, String title, String body, String link, boolean sendEmail) {
         if (userId == null) return;
-        try {
-            jdbcTemplate.update("""
-                    insert into notifications (user_id, type, title, body, link)
-                    values (:userId, :type, :title, :body, :link)
-                    """, new MapSqlParameterSource()
-                    .addValue("userId", userId)
-                    .addValue("type", type)
-                    .addValue("title", title)
-                    .addValue("body", body)
-                    .addValue("link", link));
-        } catch (Exception e) {
-            log.warn("[NotificationService] Failed to create notification for {}: {}", userId, e.getMessage());
+
+        if (isPreferenceEnabled(userId, "in_app_enabled")) {
+            try {
+                jdbcTemplate.update("""
+                        insert into notifications (user_id, type, title, body, link)
+                        values (:userId, :type, :title, :body, :link)
+                        """, new MapSqlParameterSource()
+                        .addValue("userId", userId)
+                        .addValue("type", type)
+                        .addValue("title", title)
+                        .addValue("body", body)
+                        .addValue("link", link));
+            } catch (Exception e) {
+                log.warn("[NotificationService] Failed to create notification for {}: {}", userId, e.getMessage());
+            }
         }
-        if (sendEmail) {
+
+        if (sendEmail && isPreferenceEnabled(userId, "email_enabled")) {
             try {
                 Map<String, Object> u = jdbcTemplate.queryForMap(
                         "select email, display_name from app_users where id = :id", Map.of("id", userId));
@@ -64,6 +69,28 @@ public class NotificationService {
             } catch (Exception e) {
                 log.warn("[NotificationService] Failed to send email for {}: {}", userId, e.getMessage());
             }
+        }
+    }
+
+    /**
+     * Reads a single boolean column from notification_preferences for this
+     * user. Missing row (user never touched Account Settings) or any lookup
+     * failure defaults to true — matches the column defaults declared in the
+     * notification_preferences table and AccountSettingsService's own
+     * fallback, and fails open so a preference-check bug can't silently
+     * swallow a notification.
+     */
+    private boolean isPreferenceEnabled(UUID userId, String column) {
+        try {
+            Boolean value = jdbcTemplate.queryForObject(
+                    "select " + column + " from notification_preferences where user_id = :userId",
+                    Map.of("userId", userId), Boolean.class);
+            return value == null || value;
+        } catch (EmptyResultDataAccessException e) {
+            return true;
+        } catch (Exception e) {
+            log.warn("[NotificationService] Failed to read {} preference for {}: {}", column, userId, e.getMessage());
+            return true;
         }
     }
 
