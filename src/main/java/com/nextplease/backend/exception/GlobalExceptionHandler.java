@@ -32,9 +32,23 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     ResponseEntity<ApiResponse<Void>> handleValidation(MethodArgumentNotValidException exception) {
+        // Prefer a DTO-declared message (e.g. @NotBlank(message = "...")) shown on
+        // its own — prefixing it with the raw field name ("displayName: Tên...")
+        // reads as a leaked technical detail once the message itself is already
+        // a full user-facing sentence. Fields with no custom message (still using
+        // Jakarta's default English text) keep the field-name prefix so the
+        // response stays traceable to a field.
         String message = exception.getBindingResult().getFieldErrors().stream()
                 .findFirst()
-                .map(error -> error.getField() + ": " + error.getDefaultMessage())
+                .map(error -> {
+                    String defaultMessage = error.getDefaultMessage();
+                    boolean looksLikeCustomMessage = defaultMessage != null
+                            && !defaultMessage.isBlank()
+                            && Character.isUpperCase(defaultMessage.charAt(0));
+                    return looksLikeCustomMessage
+                            ? defaultMessage
+                            : error.getField() + ": " + defaultMessage;
+                })
                 .orElse("Validation failed");
 
         return ResponseEntity.badRequest().body(ApiResponse.error(message));
