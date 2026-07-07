@@ -38,6 +38,7 @@ public class ProfileService {
     private final ReputationService reputationService;
     private final ConfigService configService;
     private final UserJitProvisioningService userJitProvisioningService;
+    private final CurrentUserService currentUserService;
     private final boolean jwtEnabled;
 
     public ProfileService(
@@ -46,6 +47,7 @@ public class ProfileService {
             ReputationService reputationService,
             ConfigService configService,
             UserJitProvisioningService userJitProvisioningService,
+            CurrentUserService currentUserService,
             @Value("${app.security.jwt.enabled:false}") boolean jwtEnabled
     ) {
         this.jdbcTemplate = jdbcTemplate;
@@ -53,6 +55,7 @@ public class ProfileService {
         this.reputationService = reputationService;
         this.configService = configService;
         this.userJitProvisioningService = userJitProvisioningService;
+        this.currentUserService = currentUserService;
         this.jwtEnabled = jwtEnabled;
     }
 
@@ -314,11 +317,32 @@ public class ProfileService {
             profile = jdbcTemplate.queryForMap("""
                     select id, headline, bio, location, school_id, avatar_config, credentials::text as credentials,
                            onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked,
-                           open_to_work, social_links::text as social_links
+                           open_to_work, social_links::text as social_links, is_public
                     from profiles where user_id = :userId
                     """, Map.of("userId", userId));
         } catch (EmptyResultDataAccessException e) {
             throw new ResourceNotFoundException("Không tìm thấy hồ sơ ứng viên.");
+        }
+
+        boolean isPublic = profile.get("is_public") == null || (Boolean) profile.get("is_public");
+        if (!isPublic) {
+            // Private portfolio: the share link is otherwise unauthenticated
+            // (permitAll), so only let it through for the owner previewing
+            // their own link, or a business/admin who legitimately needs to
+            // review this candidate (e.g. an applicant) regardless of the
+            // public-sharing toggle.
+            boolean allowed = currentUserService.tryGetCurrentUser()
+                    .map(me -> me.appUserId().equals(userId)
+                            || me.roles().contains("admin")
+                            || me.roles().contains("employer_free")
+                            || me.roles().contains("employer_premium")
+                            || me.roles().contains("organizer"))
+                    .orElse(false);
+            if (!allowed) {
+                throw new com.nextplease.backend.exception.AppException(
+                        org.springframework.http.HttpStatus.FORBIDDEN,
+                        "Portfolio này đang được đặt ở chế độ riêng tư.");
+            }
         }
 
         UUID profileId = (UUID) profile.get("id");

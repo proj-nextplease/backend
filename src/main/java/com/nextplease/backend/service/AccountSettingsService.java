@@ -1,6 +1,7 @@
 package com.nextplease.backend.service;
 
 import com.nextplease.backend.dto.request.UpdateNotificationPreferencesRequest;
+import com.nextplease.backend.dto.request.UpdatePrivacySettingsRequest;
 import com.nextplease.backend.dto.response.AccountSettingsResponse;
 import com.nextplease.backend.dto.response.MeResponse;
 import com.nextplease.backend.exception.AppException;
@@ -63,13 +64,30 @@ public class AccountSettingsService {
             // Use defaults declared above.
         }
 
+        // Profile row always exists by the time a user can reach Account
+        // Settings (onboarding creates it — see ProfileService#getPortfolio),
+        // but default defensively in case it ever doesn't.
+        boolean isPublic = true;
+        boolean openToWork = false;
+        try {
+            Map<String, Object> profile = jdbcTemplate.queryForMap("""
+                    select is_public, open_to_work from profiles where user_id = :userId
+                    """, Map.of("userId", currentUser.appUserId()));
+            isPublic = profile.get("is_public") == null || (Boolean) profile.get("is_public");
+            openToWork = profile.get("open_to_work") != null && (Boolean) profile.get("open_to_work");
+        } catch (EmptyResultDataAccessException ignored) {
+            // Use defaults declared above.
+        }
+
         return new AccountSettingsResponse(
                 (String) user.get("display_name"),
                 (String) user.get("email"),
                 (String) user.get("status"),
                 emailEnabled,
                 pushEnabled,
-                inAppEnabled
+                inAppEnabled,
+                isPublic,
+                openToWork
         );
     }
 
@@ -122,6 +140,39 @@ public class AccountSettingsService {
                 "pushEnabled", request.pushEnabled(),
                 "inAppEnabled", request.inAppEnabled()
         ));
+    }
+
+    /**
+     * Toggles the two candidate-controlled visibility flags on {@code profiles}.
+     * {@code isPublic} gates the unauthenticated share link (see
+     * ProfileService#getPortfolioByUserId — owners/admins/businesses can still
+     * always see it); {@code openToWork} is the same flag already editable from
+     * the Portfolio editor, mirrored here for convenience.
+     */
+    @Transactional
+    public void updatePrivacySettings(UpdatePrivacySettingsRequest request) {
+        MeResponse currentUser = currentUserService.getCurrentUser();
+
+        jdbcTemplate.update("""
+                update profiles
+                set is_public = :isPublic, open_to_work = :openToWork, updated_at = now()
+                where user_id = :userId
+                """, Map.of(
+                "isPublic", request.isPublic(),
+                "openToWork", request.openToWork(),
+                "userId", currentUser.appUserId()
+        ));
+    }
+
+    /**
+     * "Đăng xuất khỏi tất cả thiết bị" — the app doesn't track individual
+     * device/session records, so this is the coarse option: revoke every
+     * refresh token for the account (GoTrue logout scope=global), including
+     * the tab that requested it. Reuses the same mechanism as
+     * {@link #deactivateAccount}.
+     */
+    public void signOutAllSessions(String callerAccessToken) {
+        supabaseAdminService.signOutUser(callerAccessToken);
     }
 
     /**
