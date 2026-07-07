@@ -3,6 +3,7 @@ package com.nextplease.backend.controller;
 import com.nextplease.backend.dto.request.DeactivateAccountRequest;
 import com.nextplease.backend.dto.request.UpdateDisplayNameRequest;
 import com.nextplease.backend.dto.request.UpdateNotificationPreferencesRequest;
+import com.nextplease.backend.dto.request.UpdatePrivacySettingsRequest;
 import com.nextplease.backend.dto.response.AccountSettingsResponse;
 import com.nextplease.backend.dto.response.ApiResponse;
 import com.nextplease.backend.service.AccountSettingsService;
@@ -42,14 +43,26 @@ public class AccountSettingsController {
         return ApiResponse.success("Cập nhật tùy chọn thông báo thành công.");
     }
 
+    @PutMapping("/privacy")
+    public ApiResponse<String> updatePrivacySettings(@Valid @RequestBody UpdatePrivacySettingsRequest request) {
+        accountSettingsService.updatePrivacySettings(request);
+        return ApiResponse.success("Cập nhật quyền riêng tư thành công.");
+    }
+
+    @PostMapping("/sign-out-all-sessions")
+    public ApiResponse<String> signOutAllSessions(HttpServletRequest httpRequest) {
+        accountSettingsService.signOutAllSessions(extractBearerToken(httpRequest));
+        return ApiResponse.success("Đã đăng xuất khỏi tất cả thiết bị.");
+    }
+
     @PostMapping("/deactivate")
     public ApiResponse<String> deactivateAccount(@Valid @RequestBody DeactivateAccountRequest request, HttpServletRequest httpRequest) {
-        String accessToken = null;
-        String authHeader = httpRequest.getHeader("Authorization");
-        if (authHeader != null && authHeader.startsWith("Bearer ")) {
-            accessToken = authHeader.substring(7);
-        }
-        accountSettingsService.deactivateAccount(request.password(), accessToken);
+        accountSettingsService.deactivateAccount(request.password(), extractBearerToken(httpRequest));
         return ApiResponse.success("Tài khoản đã được vô hiệu hóa.");
+    }
+
+    private String extractBearerToken(HttpServletRequest httpRequest) {
+        String authHeader = httpRequest.getHeader("Authorization");
+        return authHeader != null && authHeader.startsWith("Bearer ") ? authHeader.substring(7) : null;
     }
 }

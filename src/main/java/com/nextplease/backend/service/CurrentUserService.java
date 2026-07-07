@@ -114,6 +114,22 @@ public class CurrentUserService {
     }
 
     /**
+     * Same as {@link #getCurrentUser()} but never throws — returns empty when
+     * there is no authenticated caller. For endpoints that are reachable both
+     * anonymously and authenticated (e.g. the public portfolio link), where the
+     * caller's identity only changes what is *allowed*, not whether the
+     * request is rejected outright.
+     */
+    @Transactional
+    public java.util.Optional<MeResponse> tryGetCurrentUser() {
+        try {
+            return java.util.Optional.of(getCurrentUser());
+        } catch (ResourceNotFoundException e) {
+            return java.util.Optional.empty();
+        }
+    }
+
+    /**
      * Returns the current user only if they hold the given role in the database.
      * Roles are read from {@code user_roles} (the authoritative source) rather than
      * the JWT, because a token may be issued before {@code app_metadata.roles} is

@@ -6,6 +6,8 @@ public record AccountSettingsResponse(
         String status,
         boolean emailNotificationsEnabled,
         boolean pushNotificationsEnabled,
-        boolean inAppNotificationsEnabled
+        boolean inAppNotificationsEnabled,
+        boolean isPublic,
+        boolean openToWork
 ) {
 }
