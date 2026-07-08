@@ -278,7 +278,8 @@ public class B2bRegistrationService {
                        fanpage_url as "fanpageUrl",
                        advisor_contact as "advisorContact",
                        verification_status as "verificationStatus",
-                       rejection_reason as "rejectionReason"
+                       rejection_reason as "rejectionReason",
+                       (select count(*) from company_follows cf where cf.company_id = companies.id) as "followerCount"
                 from companies
                 where id = :companyId
                 """, Map.of("companyId", companyId));
