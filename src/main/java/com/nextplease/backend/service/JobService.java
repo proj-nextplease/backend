@@ -558,11 +558,13 @@ public class JobService {
     public Map<String, Object> getCompanyDetails(UUID id) {
         try {
             // Public detail: same exclusion of tax code / phone / advisor contact.
+            // followerCount = số Ứng viên đang theo dõi đối tác này (từ company_follows).
             return jdbcTemplate.queryForMap("""
                     select c.id, c.name, c.company_type as "companyType", c.description, c.logo_url as "logoUrl",
                            c.website_url as "websiteUrl", c.fanpage_url as "fanpageUrl",
                            c.representative_name as "representativeName",
-                           c.school_id as "schoolId", s.name as "schoolName"
+                           c.school_id as "schoolId", s.name as "schoolName",
+                           (select count(*) from company_follows cf where cf.company_id = c.id) as "followerCount"
                     from companies c
                     left join schools s on c.school_id = s.id
                     where c.id = :id and c.verification_status = 'APPROVED'
