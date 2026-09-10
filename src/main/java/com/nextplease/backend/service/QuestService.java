@@ -687,6 +687,15 @@ public class QuestService {
 
     private void awardNp(UUID userId, int npAmount, UUID questApplicationId, String questId) {
         try {
+            // Ensure the wallet exists before locking it — a candidate who never topped
+            // up has no wallet row yet, and without this the FOR UPDATE select below would
+            // throw and the NP reward would be silently lost (EXP/RS still get awarded).
+            jdbcTemplate.update("""
+                    insert into wallets (user_id, np_balance, locked_np_balance)
+                    values (:userId, 0, 0)
+                    on conflict (user_id) do nothing
+                    """, Map.of("userId", userId));
+
             Map<String, Object> wallet = jdbcTemplate.queryForMap(
                     "select id, np_balance from wallets where user_id = :userId for update",
                     Map.of("userId", userId));

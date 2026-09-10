@@ -105,33 +105,6 @@ public class ApplicationService {
             }
         }
 
-        // 4b. Early Access gate (Job Match Alert subscription or general Premium)
-        Object createdAtRaw = job.get("created_at");
-        if (createdAtRaw != null) {
-            java.time.Instant createdAtInstant = null;
-            if (createdAtRaw instanceof java.sql.Timestamp ts) {
-                createdAtInstant = ts.toInstant();
-            } else if (createdAtRaw instanceof java.time.OffsetDateTime odt) {
-                createdAtInstant = odt.toInstant();
-            } else if (createdAtRaw instanceof java.time.Instant inst) {
-                createdAtInstant = inst;
-            }
-            if (createdAtInstant != null) {
-                int earlyAccessHours = configService.getInt("job_match_early_access_hours", 12);
-                java.time.Instant earlyAccessThreshold = java.time.Instant.now().minus(earlyAccessHours, java.time.temporal.ChronoUnit.HOURS);
-                if (createdAtInstant.isAfter(earlyAccessThreshold)) {
-                    boolean hasEarlyAccess = checkJobMatchAlertSubscribed(userId);
-                    if (!hasEarlyAccess) {
-                        throw new AppException(
-                                HttpStatus.PAYMENT_REQUIRED,
-                                String.format("Cơ hội này đang trong thời gian Xem sớm (%d giờ đầu). Đăng ký Job Match Alert để ứng tuyển ngay!", earlyAccessHours),
-                                "EARLY_ACCESS_REQUIRED"
-                        );
-                    }
-                }
-            }
-        }
-
         // 5. Snapshot eligibility at time of application
         String snapshot = buildSnapshot(myRs, candidate);
 
@@ -220,6 +193,50 @@ public class ApplicationService {
                 where a.job_id = :jobId
                 order by (case when a.boosted_until > now() then 1 else 0 end) desc, a.applied_at asc
                 """, Map.of("jobId", jobId));
+    }
+
+    /**
+     * Organizer opened an applicant's detail: auto-advance SUBMITTED → VIEWED.
+     * Idempotent — only the first view transitions (never overrides a later stage),
+     * and the candidate is notified once that their profile was seen.
+     */
+    @Transactional
+    public void markViewed(UUID applicationId, UUID organizerUserId) {
+        Map<String, Object> appInfo;
+        try {
+            appInfo = jdbcTemplate.queryForMap("""
+                    select a.id, a.candidate_id, a.status, a.job_id, j.title as job_title
+                    from applications a
+                    join jobs j on j.id = a.job_id
+                    join companies c on c.id = j.company_id
+                    where a.id = :appId
+                      and exists (select 1 from authority_nodes an
+                                  where an.company_id = c.id and an.user_id = :ownerId
+                                    and an.status = 'ACTIVE' and an.deleted_at is null)
+                    """, Map.of("appId", applicationId, "ownerId", organizerUserId));
+        } catch (org.springframework.dao.EmptyResultDataAccessException e) {
+            throw new AppException(HttpStatus.FORBIDDEN, "Không có quyền xem đơn ứng tuyển này.");
+        }
+
+        if (!"SUBMITTED".equals(appInfo.get("status"))) {
+            return; // already viewed / further along — nothing to do
+        }
+
+        int rows = jdbcTemplate.update("""
+                update applications set status = 'VIEWED', updated_at = now()
+                where id = :id and status = 'SUBMITTED'
+                """, Map.of("id", applicationId));
+
+        if (rows > 0) {
+            UUID candidateUserId = (UUID) appInfo.get("candidate_id");
+            String jobTitle = (String) appInfo.get("job_title");
+            UUID jobId = (UUID) appInfo.get("job_id");
+            notificationService.notify(candidateUserId, "APPLICATION_STATUS",
+                    "Hồ sơ của bạn đã được xem",
+                    "Nhà tuyển dụng vừa xem đơn ứng tuyển \"" + jobTitle + "\" của bạn.",
+                    jobId != null ? "/jobs/" + jobId : null);
+            log.info("[ApplicationService] Application {} auto-marked VIEWED by organizer {}", applicationId, organizerUserId);
+        }
     }
 
     /**
@@ -431,18 +448,6 @@ public class ApplicationService {
                 from app_users
                 where id = :userId
                   and premium_until > now()
-                """, Map.of("userId", userId), Integer.class);
-        return count != null && count > 0;
-    }
-
-    private boolean checkJobMatchAlertSubscribed(UUID userId) {
-        if (checkPremium(userId)) {
-            return true;
-        }
-        Integer count = jdbcTemplate.queryForObject("""
-                select count(*) from subscriptions
-                where user_id = :userId and plan_code = 'job_match_alert_monthly'
-                  and status = 'ACTIVE' and expires_at > now()
                 """, Map.of("userId", userId), Integer.class);
         return count != null && count > 0;
     }
