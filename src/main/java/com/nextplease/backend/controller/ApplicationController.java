@@ -67,6 +67,14 @@ public class ApplicationController {
         return ApiResponse.success("Cập nhật trạng thái thành công.");
     }
 
+    /** PATCH /api/v1/organizer/applications/{id}/viewed — auto-mark an applicant as seen (SUBMITTED → VIEWED) */
+    @PatchMapping("/organizer/applications/{id}/viewed")
+    public ApiResponse<String> markApplicationViewed(@PathVariable UUID id) {
+        UUID userId = currentUserService.getCurrentUser().appUserId();
+        applicationService.markViewed(id, userId);
+        return ApiResponse.success("VIEWED");
+    }
+
     /** PATCH /api/v1/me/applications/{id}/withdraw — candidate withdraws own application */
     @PatchMapping("/me/applications/{id}/withdraw")
     public ApiResponse<String> withdrawApplication(@PathVariable UUID id) {
