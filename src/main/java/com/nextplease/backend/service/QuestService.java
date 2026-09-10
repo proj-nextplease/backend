@@ -242,6 +242,7 @@ public class QuestService {
                     "Bạn đã ứng tuyển Quest này rồi.", "ALREADY_APPLIED");
         }
 
+        recordQuestHistory(applicationId, "SUBMITTED");
         log.info("[QuestService] User {} applied to quest {} → qa {}", userId, questId, applicationId);
 
         Object ownerId = quest.get("created_by");
@@ -268,6 +269,8 @@ public class QuestService {
                     qa.applied_at as "appliedAt",
                     qa.updated_at as "updatedAt",
                     qa.boosted_until as "boostedUntil",
+                    (select coalesce(jsonb_agg(jsonb_build_object('status', h.status, 'at', h.created_at) order by h.created_at), '[]'::jsonb)::text
+                     from application_status_history h where h.quest_application_id = qa.id) as "statusHistory",
                     q.id          as "questId",
                     q.title       as "questTitle",
                     q.category,
@@ -312,6 +315,7 @@ public class QuestService {
                 set status = 'WITHDRAWN', updated_at = now()
                 where id = :id
                 """, Map.of("id", applicationId));
+        recordQuestHistory(applicationId, "WITHDRAWN");
     }
 
     // ── Organizer: Create Quest ───────────────────────────────────────────────
@@ -476,6 +480,10 @@ public class QuestService {
                 .addValue("id", applicationId)
                 .addValue("status", newStatus)
                 .addValue("rejectReason", "REJECTED".equals(newStatus) ? rejectReason : null));
+
+        if (!newStatus.equals(currentStatus)) {
+            recordQuestHistory(applicationId, newStatus);
+        }
 
         // If completing, award EXP and NP
         if ("COMPLETED".equals(newStatus)) {
@@ -673,6 +681,13 @@ public class QuestService {
         } catch (org.springframework.dao.EmptyResultDataAccessException e) {
             throw new ResourceNotFoundException("Quest không tồn tại.");
         }
+    }
+
+    /** Append one row to the quest application's status timeline. */
+    private void recordQuestHistory(UUID questApplicationId, String status) {
+        jdbcTemplate.update(
+                "insert into application_status_history (quest_application_id, status) values (:id, :status)",
+                Map.of("id", questApplicationId, "status", status));
     }
 
     private UUID getProfileId(UUID userId) {
