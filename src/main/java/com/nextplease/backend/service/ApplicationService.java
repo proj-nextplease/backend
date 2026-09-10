@@ -130,6 +130,7 @@ public class ApplicationService {
                     "Bạn đã ứng tuyển vị trí này rồi.", "ALREADY_APPLIED");
         }
 
+        recordHistory(applicationId, "SUBMITTED");
         log.info("[ApplicationService] User {} applied to job {} → application {}", userId, jobId, applicationId);
 
         // Notify the post owner that a new candidate applied.
@@ -228,6 +229,7 @@ public class ApplicationService {
                 """, Map.of("id", applicationId));
 
         if (rows > 0) {
+            recordHistory(applicationId, "VIEWED");
             UUID candidateUserId = (UUID) appInfo.get("candidate_id");
             String jobTitle = (String) appInfo.get("job_title");
             UUID jobId = (UUID) appInfo.get("job_id");
@@ -302,6 +304,10 @@ public class ApplicationService {
                 .addValue("status", newStatus)
                 .addValue("rejectReason", "REJECTED".equals(newStatus) ? rejectReason : null));
 
+        if (!newStatus.equals(currentStatus)) {
+            recordHistory(applicationId, newStatus);
+        }
+
         // Award EXP when organizer marks a job application as COMPLETED
         if ("COMPLETED".equals(newStatus)) {
             UUID candidateUserId = (UUID) appInfo.get("candidate_id");
@@ -357,6 +363,8 @@ public class ApplicationService {
                     a.applied_at,
                     a.updated_at,
                     a.boosted_until as "boostedUntil",
+                    (select coalesce(jsonb_agg(jsonb_build_object('status', h.status, 'at', h.created_at) order by h.created_at), '[]'::jsonb)::text
+                     from application_status_history h where h.application_id = a.id) as "statusHistory",
                     j.id            as job_id,
                     j.title         as job_title,
                     j.job_type,
@@ -403,10 +411,18 @@ public class ApplicationService {
                 set status = 'WITHDRAWN', updated_at = now()
                 where id = :id
                 """, Map.of("id", applicationId));
+        recordHistory(applicationId, "WITHDRAWN");
         log.info("[ApplicationService] Candidate {} withdrew application {}", userId, applicationId);
     }
 
     // ── private helpers ──────────────────────────────────────────────────────
+
+    /** Append one row to the application's status timeline. Best-effort within the caller's transaction. */
+    private void recordHistory(UUID applicationId, String status) {
+        jdbcTemplate.update(
+                "insert into application_status_history (application_id, status) values (:id, :status)",
+                Map.of("id", applicationId, "status", status));
+    }
 
     private Map<String, Object> fetchJobOrThrow(UUID jobId) {
         try {
