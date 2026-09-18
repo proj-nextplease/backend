@@ -14,6 +14,7 @@ public record PortfolioResponse(
         List<String> skills,
         Map<String, Object> avatar,
         String avatarUrl,
+        String publicSlug,
         List<ExperienceDto> experiences,
         List<CredentialDto> credentials,
         boolean onboardingCompleted,

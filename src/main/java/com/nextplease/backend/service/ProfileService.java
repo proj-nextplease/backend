@@ -7,6 +7,8 @@ import com.nextplease.backend.dto.ExperienceDto;
 import com.nextplease.backend.dto.request.PortfolioRequest;
 import com.nextplease.backend.dto.response.PortfolioResponse;
 import com.nextplease.backend.dto.response.PublicPortfolioResponse;
+import com.nextplease.backend.exception.AppException;
+import com.nextplease.backend.util.Slugs;
 import com.nextplease.backend.exception.ResourceNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.LocalDate;
@@ -21,6 +23,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -199,7 +202,7 @@ public class ProfileService {
         Map<String, Object> profile;
         try {
             profile = jdbcTemplate.queryForMap("""
-                    select id, headline, bio, location, school_id, avatar_config, avatar_url, credentials, onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked, open_to_work, social_links
+                    select id, headline, bio, location, school_id, avatar_config, avatar_url, public_slug, credentials, onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked, open_to_work, social_links
                     from profiles where user_id = :userId
                     """, Map.of("userId", userId));
         } catch (EmptyResultDataAccessException e) {
@@ -211,7 +214,7 @@ public class ProfileService {
                     """, Map.of("id", profileId, "userId", userId));
 
             profile = jdbcTemplate.queryForMap("""
-                    select id, headline, bio, location, school_id, avatar_config, avatar_url, credentials, onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked, open_to_work, social_links
+                    select id, headline, bio, location, school_id, avatar_config, avatar_url, public_slug, credentials, onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked, open_to_work, social_links
                     from profiles where user_id = :userId
                     """, Map.of("userId", userId));
         }
@@ -236,6 +239,7 @@ public class ProfileService {
         // 4. Parse JSON columns
         Map<String, Object> avatarConfig = parseJsonMap(getJsonString(profile.get("avatar_config")));
         String avatarUrl = syncSocialAvatar(userId, (String) profile.get("avatar_url"));
+        String publicSlug = ensurePublicSlug(userId, (String) profile.get("public_slug"), displayName);
         List<CredentialDto> credentials = parseCredentialsJson(getJsonString(profile.get("credentials")));
 
         // 5. Get skills
@@ -286,6 +290,7 @@ public class ProfileService {
                 skills,
                 avatarConfig,
                 avatarUrl,
+                publicSlug,
                 experiences,
                 credentials,
                 onboardingCompleted,
@@ -323,6 +328,119 @@ public class ProfileService {
                 where user_id = :userId and avatar_url is distinct from :avatarUrl
                 """, Map.of("userId", userId, "avatarUrl", fromToken));
         return fromToken;
+    }
+
+    /**
+     * Bảo đảm hồ sơ luôn có đường dẫn công khai dạng chữ.
+     *
+     * Link cũ là UUID ({@code /portfolio/view/9f3a1c...}) — không ai muốn dán
+     * thứ đó vào bio. Người dùng cũ có {@code public_slug} đang null, nên sinh
+     * ngay lúc đọc hồ sơ thay vì bắt họ tự đặt trước khi có link dùng được.
+     * Sau đó họ vẫn đổi được bằng {@link #updatePublicSlug(String)}.
+     *
+     * @param stored slug đang lưu; trả lại luôn nếu đã có
+     * @return slug dùng được
+     */
+    private String ensurePublicSlug(UUID userId, String stored, String displayName) {
+        if (stored != null && !stored.isBlank()) {
+            return stored;
+        }
+
+        String base = Slugs.slugify(displayName);
+        if (base.length() < Slugs.MIN_LENGTH || Slugs.isReserved(base)) {
+            base = "np-" + base;            // tên quá ngắn hoặc trùng từ giữ chỗ
+        }
+        if (base.length() < Slugs.MIN_LENGTH) {
+            base = "ung-vien";              // tên toàn ký tự đặc biệt
+        }
+
+        String slug = claimFirstFreeSlug(userId, base);
+        log.info("Sinh public_slug '{}' cho user {}", slug, userId);
+        return slug;
+    }
+
+    /**
+     * Thử {@code base}, rồi {@code base-2}, {@code base-3}… cho tới khi ghi được.
+     *
+     * Dựa vào unique index {@code ux_profiles_public_slug} làm trọng tài thay vì
+     * kiểm tra trước rồi ghi sau: hai người trùng tên đăng nhập cùng lúc thì
+     * cách kiểm-tra-trước vẫn có thể cùng thấy slug trống và cùng ghi.
+     */
+    private String claimFirstFreeSlug(UUID userId, String base) {
+        for (int suffix = 1; suffix <= 50; suffix++) {
+            String candidate = suffix == 1 ? base : base + "-" + suffix;
+            if (candidate.length() > Slugs.MAX_LENGTH) {
+                candidate = candidate.substring(candidate.length() - Slugs.MAX_LENGTH);
+            }
+            try {
+                int updated = jdbcTemplate.update("""
+                        update profiles
+                        set public_slug = :slug, updated_at = now()
+                        where user_id = :userId and public_slug is null
+                        """, Map.of("userId", userId, "slug", candidate));
+                if (updated > 0) {
+                    return candidate;
+                }
+                // 0 dòng = một request song song vừa đặt slug; đọc lại giá trị đó.
+                return jdbcTemplate.queryForObject(
+                        "select public_slug from profiles where user_id = :userId",
+                        Map.of("userId", userId), String.class);
+            } catch (org.springframework.dao.DuplicateKeyException e) {
+                // slug đã có người dùng — thử hậu tố kế tiếp
+            }
+        }
+        // Rất khó xảy ra: rơi về chuỗi ngẫu nhiên để hồ sơ vẫn có link.
+        String fallback = base + "-" + UUID.randomUUID().toString().substring(0, 6);
+        jdbcTemplate.update("""
+                update profiles set public_slug = :slug, updated_at = now()
+                where user_id = :userId and public_slug is null
+                """, Map.of("userId", userId, "slug", fallback));
+        return fallback;
+    }
+
+    /**
+     * Người dùng tự đổi đường dẫn công khai của mình.
+     *
+     * @throws AppException 400 nếu sai định dạng, 409 nếu đã có người khác dùng
+     */
+    @Transactional
+    public String updatePublicSlug(String rawSlug) {
+        UUID userId = currentUserService.getCurrentUser().appUserId();
+        String slug = rawSlug == null ? "" : rawSlug.trim().toLowerCase(java.util.Locale.ROOT);
+
+        String error = Slugs.validationError(slug);
+        if (error != null) {
+            throw new AppException(HttpStatus.BAD_REQUEST, error);
+        }
+
+        try {
+            int updated = jdbcTemplate.update("""
+                    update profiles
+                    set public_slug = :slug, updated_at = now()
+                    where user_id = :userId
+                    """, Map.of("userId", userId, "slug", slug));
+            if (updated == 0) {
+                throw new ResourceNotFoundException("Không tìm thấy hồ sơ để cập nhật.");
+            }
+        } catch (org.springframework.dao.DuplicateKeyException e) {
+            throw new AppException(HttpStatus.CONFLICT,
+                    "Đường dẫn \"" + slug + "\" đã có người sử dụng. Vui lòng chọn tên khác.");
+        }
+        return slug;
+    }
+
+    /** Hồ sơ công khai tra theo slug. Dùng cho đường dẫn {@code /p/{slug}}. */
+    public PublicPortfolioResponse getPortfolioBySlug(String slug) {
+        String normalized = slug == null ? "" : slug.trim().toLowerCase(java.util.Locale.ROOT);
+        UUID userId;
+        try {
+            userId = jdbcTemplate.queryForObject(
+                    "select user_id from profiles where public_slug = :slug",
+                    Map.of("slug", normalized), UUID.class);
+        } catch (EmptyResultDataAccessException e) {
+            throw new ResourceNotFoundException("Không tìm thấy portfolio với đường dẫn này.");
+        }
+        return getPortfolioByUserId(userId);
     }
 
     public PublicPortfolioResponse getPortfolioByUserId(UUID userId) {

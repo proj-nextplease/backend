@@ -66,6 +66,7 @@ public class SecurityConfig {
                             .requestMatchers(HttpMethod.GET, "/api/v1/companies", "/api/v1/companies/**").permitAll()
                             .requestMatchers(HttpMethod.GET, "/api/v1/quests", "/api/v1/quests/exp-config").permitAll()
                             .requestMatchers(HttpMethod.GET, "/api/v1/profiles/*/public").permitAll()
+                            .requestMatchers(HttpMethod.GET, "/api/v1/profiles/by-slug/*/public").permitAll()
                             .requestMatchers(HttpMethod.GET, "/api/v1/discussions/**").permitAll()
                             .requestMatchers(HttpMethod.POST, "/api/v1/auth/candidates/register/**").permitAll()
                             .requestMatchers(HttpMethod.POST, "/api/v1/auth/b2b/register").permitAll()
