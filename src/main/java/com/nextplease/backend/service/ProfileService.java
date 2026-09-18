@@ -173,7 +173,8 @@ public class ProfileService {
             }
 
             try {
-                com.nextplease.backend.entity.AppUser provisioned = userJitProvisioningService.provisionLocalUserJit(supabaseUserId, email, displayName, provider);
+                com.nextplease.backend.entity.AppUser provisioned = userJitProvisioningService.provisionLocalUserJit(
+                        supabaseUserId, email, displayName, provider, currentUserService.avatarUrlFromToken());
                 user = Map.of(
                         "id", provisioned.getId(),
                         "display_name", provisioned.getDisplayName(),
@@ -198,7 +199,7 @@ public class ProfileService {
         Map<String, Object> profile;
         try {
             profile = jdbcTemplate.queryForMap("""
-                    select id, headline, bio, location, school_id, avatar_config, credentials, onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked, open_to_work, social_links
+                    select id, headline, bio, location, school_id, avatar_config, avatar_url, credentials, onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked, open_to_work, social_links
                     from profiles where user_id = :userId
                     """, Map.of("userId", userId));
         } catch (EmptyResultDataAccessException e) {
@@ -210,7 +211,7 @@ public class ProfileService {
                     """, Map.of("id", profileId, "userId", userId));
 
             profile = jdbcTemplate.queryForMap("""
-                    select id, headline, bio, location, school_id, avatar_config, credentials, onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked, open_to_work, social_links
+                    select id, headline, bio, location, school_id, avatar_config, avatar_url, credentials, onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked, open_to_work, social_links
                     from profiles where user_id = :userId
                     """, Map.of("userId", userId));
         }
@@ -234,6 +235,7 @@ public class ProfileService {
 
         // 4. Parse JSON columns
         Map<String, Object> avatarConfig = parseJsonMap(getJsonString(profile.get("avatar_config")));
+        String avatarUrl = syncSocialAvatar(userId, (String) profile.get("avatar_url"));
         List<CredentialDto> credentials = parseCredentialsJson(getJsonString(profile.get("credentials")));
 
         // 5. Get skills
@@ -283,6 +285,7 @@ public class ProfileService {
                 bio,
                 skills,
                 avatarConfig,
+                avatarUrl,
                 experiences,
                 credentials,
                 onboardingCompleted,
@@ -295,6 +298,31 @@ public class ProfileService {
                 openToWork,
                 socialLinks
         );
+    }
+
+    /**
+     * Giữ {@code profiles.avatar_url} khớp với ảnh mà nhà cung cấp đăng nhập xã
+     * hội đang cấp.
+     *
+     * Người dùng tạo trước khi tính năng này có mặt thì cột đang null, còn ảnh
+     * Google thì đổi URL theo thời gian — nên đồng bộ tại đây, ngay lúc đọc hồ
+     * sơ, thay vì chỉ ghi một lần lúc khởi tạo tài khoản. Câu UPDATE có điều
+     * kiện nên không ghi gì khi giá trị đã đúng.
+     *
+     * @param stored giá trị đang lưu trong DB
+     * @return URL nên dùng để hiển thị, hoặc null nếu không có ảnh nào
+     */
+    private String syncSocialAvatar(UUID userId, String stored) {
+        String fromToken = currentUserService.avatarUrlFromToken();
+        if (fromToken == null || fromToken.equals(stored)) {
+            return stored;
+        }
+        jdbcTemplate.update("""
+                update profiles
+                set avatar_url = :avatarUrl, updated_at = now()
+                where user_id = :userId and avatar_url is distinct from :avatarUrl
+                """, Map.of("userId", userId, "avatarUrl", fromToken));
+        return fromToken;
     }
 
     public PublicPortfolioResponse getPortfolioByUserId(UUID userId) {
@@ -462,7 +490,8 @@ public class ProfileService {
 
             Map<String, Object> newUser;
             try {
-                com.nextplease.backend.entity.AppUser provisioned = userJitProvisioningService.provisionLocalUserJit(supabaseUserId, email, displayName, provider);
+                com.nextplease.backend.entity.AppUser provisioned = userJitProvisioningService.provisionLocalUserJit(
+                        supabaseUserId, email, displayName, provider, currentUserService.avatarUrlFromToken());
                 newUser = Map.of(
                         "id", provisioned.getId(),
                         "display_name", provisioned.getDisplayName(),
