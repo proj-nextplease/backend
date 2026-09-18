@@ -433,11 +433,6 @@ public class ProfileService {
         return slug;
     }
 
-    /** Chuỗi rỗng từ form nên lưu thành null để cột trống là trống thật. */
-    private static String blankToNull(String value) {
-        return value == null || value.isBlank() ? null : value;
-    }
-
     /** Hồ sơ công khai tra theo slug. Dùng cho đường dẫn {@code /p/{slug}}. */
     public PublicPortfolioResponse getPortfolioBySlug(String slug) {
         String normalized = slug == null ? "" : slug.trim().toLowerCase(java.util.Locale.ROOT);
