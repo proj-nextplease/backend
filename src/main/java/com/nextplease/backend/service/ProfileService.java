@@ -202,7 +202,7 @@ public class ProfileService {
         Map<String, Object> profile;
         try {
             profile = jdbcTemplate.queryForMap("""
-                    select id, headline, bio, location, school_id, avatar_config, avatar_url, public_slug, credentials, onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked, open_to_work, social_links
+                    select id, headline, bio, location, school_id, avatar_config, avatar_url, public_slug, cover_banner_url, cover_banner_pos, credentials, onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked, open_to_work, social_links
                     from profiles where user_id = :userId
                     """, Map.of("userId", userId));
         } catch (EmptyResultDataAccessException e) {
@@ -214,7 +214,7 @@ public class ProfileService {
                     """, Map.of("id", profileId, "userId", userId));
 
             profile = jdbcTemplate.queryForMap("""
-                    select id, headline, bio, location, school_id, avatar_config, avatar_url, public_slug, credentials, onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked, open_to_work, social_links
+                    select id, headline, bio, location, school_id, avatar_config, avatar_url, public_slug, cover_banner_url, cover_banner_pos, credentials, onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked, open_to_work, social_links
                     from profiles where user_id = :userId
                     """, Map.of("userId", userId));
         }
@@ -240,6 +240,8 @@ public class ProfileService {
         Map<String, Object> avatarConfig = parseJsonMap(getJsonString(profile.get("avatar_config")));
         String avatarUrl = syncSocialAvatar(userId, (String) profile.get("avatar_url"));
         String publicSlug = ensurePublicSlug(userId, (String) profile.get("public_slug"), displayName);
+        String coverBannerUrl = (String) profile.get("cover_banner_url");
+        String coverBannerPos = (String) profile.get("cover_banner_pos");
         List<CredentialDto> credentials = parseCredentialsJson(getJsonString(profile.get("credentials")));
 
         // 5. Get skills
@@ -291,6 +293,8 @@ public class ProfileService {
                 avatarConfig,
                 avatarUrl,
                 publicSlug,
+                coverBannerUrl,
+                coverBannerPos,
                 experiences,
                 credentials,
                 onboardingCompleted,
@@ -429,6 +433,11 @@ public class ProfileService {
         return slug;
     }
 
+    /** Chuỗi rỗng từ form nên lưu thành null để cột trống là trống thật. */
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
+    }
+
     /** Hồ sơ công khai tra theo slug. Dùng cho đường dẫn {@code /p/{slug}}. */
     public PublicPortfolioResponse getPortfolioBySlug(String slug) {
         String normalized = slug == null ? "" : slug.trim().toLowerCase(java.util.Locale.ROOT);
@@ -461,7 +470,8 @@ public class ProfileService {
         Map<String, Object> profile;
         try {
             profile = jdbcTemplate.queryForMap("""
-                    select id, headline, bio, location, school_id, avatar_config, credentials::text as credentials,
+                    select id, headline, bio, location, school_id, avatar_config, avatar_url,
+                           cover_banner_url, cover_banner_pos, credentials::text as credentials,
                            onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked,
                            open_to_work, social_links::text as social_links, is_public
                     from profiles where user_id = :userId
@@ -553,7 +563,11 @@ public class ProfileService {
 
         return new PublicPortfolioResponse(
                 displayName, headline, schoolName, location, bio,
-                skills, avatarConfig, experiences, credentials,
+                skills, avatarConfig,
+                (String) profile.get("avatar_url"),
+                (String) profile.get("cover_banner_url"),
+                (String) profile.get("cover_banner_pos"),
+                experiences, credentials,
                 reputationScore, totalExp, currentLevel,
                 selectedTheme, themeUnlocked,
                 openToWork, socialLinks
@@ -685,6 +699,8 @@ public class ProfileService {
                     credentials = cast(:credentials as jsonb),
                     open_to_work = :openToWork,
                     social_links = cast(:socialLinks as jsonb),
+                    cover_banner_url = :coverBannerUrl,
+                    cover_banner_pos = :coverBannerPos,
                     onboarding_completed = case when :isDraft = true then onboarding_completed else true end,
                     updated_at = now()
                 where id = :profileId
@@ -697,6 +713,8 @@ public class ProfileService {
                 .addValue("credentials", credentialsJson)
                 .addValue("openToWork", request.openToWork() != null && request.openToWork())
                 .addValue("socialLinks", socialLinksJson)
+                .addValue("coverBannerUrl", blankToNull(request.coverBannerUrl()))
+                .addValue("coverBannerPos", blankToNull(request.coverBannerPos()))
                 .addValue("profileId", profileId)
                 .addValue("isDraft", isDraft));
 
