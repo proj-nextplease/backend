@@ -109,7 +109,7 @@ public class JobService {
                 .addValue("specialty", request.specialty().toUpperCase().trim())
                 .addValue("compensation", request.compensation())
                 .addValue("minReqRs", request.minReqRs())
-                .addValue("location", request.location())
+                .addValue("location", request.location().trim())
                 .addValue("isRemote", request.isRemote() != null ? request.isRemote() : false)
                 .addValue("capacity", request.capacity())
                 .addValue("deadlineAt", request.deadlineAt())
@@ -200,7 +200,7 @@ public class JobService {
                 .addValue("specialty", request.specialty().toUpperCase().trim())
                 .addValue("compensation", request.compensation())
                 .addValue("minReqRs", request.minReqRs())
-                .addValue("location", request.location())
+                .addValue("location", request.location().trim())
                 .addValue("isRemote", request.isRemote() != null ? request.isRemote() : false)
                 .addValue("capacity", request.capacity())
                 .addValue("deadlineAt", request.deadlineAt())
@@ -257,9 +257,12 @@ public class JobService {
                        j.location,
                        j.is_remote as "isRemote",
                        j.deadline_at as "deadlineAt",
+                       j.created_at as "createdAt",
                        j.status,
                        c.name as "companyName",
-                       c.logo_url as "companyLogo"
+                       c.company_type as "companyType",
+                       c.logo_url as "companyLogo",
+                       (select count(*) from applications a where a.job_id = j.id) as "applicantsCount"
                 from jobs j
                 join companies c on j.company_id = c.id
                 where j.status = 'OPEN'
@@ -407,7 +410,7 @@ public class JobService {
                                q.exp_reward as "expReward",
                                q.np_reward as "npReward",
                                q.min_req_rs as "minReqRs",
-                               'FPTU HCM' as "location",
+                               q.location,
                                false as "isRemote",
                                q.capacity,
                                q.ends_at as "deadlineAt",

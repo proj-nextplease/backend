@@ -19,6 +19,7 @@ public record JobCreateRequest(
         @NotBlank @Size(max = 50) String specialty,
         BigDecimal compensation,
         @NotNull @Min(0) @Max(100) Integer minReqRs,
+        @NotBlank(message = "Vui lòng nhập địa điểm làm việc")
         @Size(max = 200) String location,
         Boolean isRemote,
         @Min(1) Integer capacity,

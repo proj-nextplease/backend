@@ -439,7 +439,8 @@ public class CompanyMembershipService {
 
     /** Admin provisions an APPROVED company shell and invites the representative as OWNER. */
     @Transactional
-    public Map<String, Object> provisionCompany(UUID adminUserId, String name, String companyType, String representativeEmail) {
+    public Map<String, Object> provisionCompany(UUID adminUserId, String name, String companyType,
+                                                String address, String representativeEmail) {
         if (name == null || name.isBlank()) {
             throw new AppException(HttpStatus.BAD_REQUEST, "Tên tổ chức không được để trống.");
         }
@@ -447,16 +448,22 @@ public class CompanyMembershipService {
         if (email.isBlank()) {
             throw new AppException(HttpStatus.BAD_REQUEST, "Email người đại diện không hợp lệ.");
         }
+        // Địa chỉ là bắt buộc kể cả khi tài khoản được admin cấp: tin đăng sau này
+        // lấy mặc định từ đây.
+        if (address == null || address.isBlank()) {
+            throw new AppException(HttpStatus.BAD_REQUEST, "Địa chỉ tổ chức không được để trống.");
+        }
         String type = companyType == null || companyType.isBlank() ? "SME" : companyType.trim().toUpperCase();
 
         // owner_user_id is NOT NULL; seed it with the admin until the representative accepts the OWNER invite.
         UUID companyId = jdbcTemplate.queryForObject("""
-                insert into companies (owner_user_id, name, company_type, verification_status, created_at, updated_at)
-                values (:adminUserId, :name, :type, 'PENDING', now(), now())
+                insert into companies (owner_user_id, name, company_type, address, verification_status, created_at, updated_at)
+                values (:adminUserId, :name, :type, :address, 'PENDING', now(), now())
                 returning id
                 """, new MapSqlParameterSource()
                 .addValue("adminUserId", adminUserId)
                 .addValue("name", name.trim())
+                .addValue("address", address.trim())
                 .addValue("type", type), UUID.class);
 
         String rawToken = generateToken();

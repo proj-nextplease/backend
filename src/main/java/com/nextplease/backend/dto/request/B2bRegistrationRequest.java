@@ -21,6 +21,8 @@ public record B2bRegistrationRequest(
         // B2B Organization Details
         @NotBlank @Size(max = 200) String companyName,
         @NotBlank @Size(max = 50) String companyType, // SME, STARTUP, CLUB, etc.
+        @NotBlank(message = "Vui lòng nhập địa chỉ của tổ chức")
+        @Size(max = 300) String address, // Địa chỉ trụ sở / sinh hoạt — prefill cho tin đăng
         String description,
         String websiteUrl,
         String logoUrl,

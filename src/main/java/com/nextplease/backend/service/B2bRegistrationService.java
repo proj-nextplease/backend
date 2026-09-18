@@ -153,6 +153,7 @@ public class B2bRegistrationService {
                         owner_user_id,
                         name,
                         company_type,
+                        address,
                         description,
                         website_url,
                         logo_url,
@@ -171,6 +172,7 @@ public class B2bRegistrationService {
                         :ownerUserId,
                         :name,
                         :companyType,
+                        :address,
                         :description,
                         :websiteUrl,
                         :logoUrl,
@@ -189,6 +191,7 @@ public class B2bRegistrationService {
                     .addValue("ownerUserId", userId)
                     .addValue("name", request.companyName().trim())
                     .addValue("companyType", request.companyType().toUpperCase().trim())
+                    .addValue("address", request.address().trim())
                     .addValue("description", request.description())
                     .addValue("websiteUrl", request.websiteUrl())
                     .addValue("logoUrl", request.logoUrl())
@@ -267,6 +270,7 @@ public class B2bRegistrationService {
                        owner_user_id as "ownerUserId",
                        name,
                        company_type as "companyType",
+                       address,
                        description,
                        website_url as "websiteUrl",
                        logo_url as "logoUrl",
@@ -360,6 +364,7 @@ public class B2bRegistrationService {
                 update companies
                 set name = :name,
                     company_type = :companyType,
+                    address = :address,
                     description = :description,
                     website_url = :websiteUrl,
                     logo_url = :logoUrl,
@@ -378,6 +383,7 @@ public class B2bRegistrationService {
                 .addValue("companyId", companyId)
                 .addValue("name", request.companyName().trim())
                 .addValue("companyType", request.companyType().toUpperCase().trim())
+                .addValue("address", request.address().trim())
                 .addValue("description", request.description())
                 .addValue("websiteUrl", request.websiteUrl())
                 .addValue("logoUrl", request.logoUrl())
