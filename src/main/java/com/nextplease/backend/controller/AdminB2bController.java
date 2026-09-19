@@ -116,6 +116,7 @@ public class AdminB2bController {
                 currentAdmin.appUserId(),
                 body.get("name"),
                 body.get("companyType"),
+                body.get("address"),
                 body.get("representativeEmail"));
         return ApiResponse.success(result);
     }

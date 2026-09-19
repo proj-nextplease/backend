@@ -25,7 +25,11 @@ public record PortfolioRequest(
         List<CredentialDto> credentials,
 
         Boolean openToWork,
-        Map<String, Object> socialLinks
+        Map<String, Object> socialLinks,
+
+        /** Ảnh bìa (data URL hoặc http) và khung hình "x% y% zoom". */
+        String coverBannerUrl,
+        String coverBannerPos
 ) {
 }
 

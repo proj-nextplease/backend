@@ -96,7 +96,8 @@ public class CurrentUserService {
                             }
                         }
 
-                        return userJitProvisioningService.provisionLocalUserJit(supabaseUserId, email, displayName, provider);
+                        return userJitProvisioningService.provisionLocalUserJit(
+                                supabaseUserId, email, displayName, provider, avatarUrlFromToken());
                     });
         } catch (org.springframework.dao.DataIntegrityViolationException e) {
             log.info("Concurrent JIT provisioning detected in CurrentUserService for user: {}. Fetching existing user.", supabaseUserId);
@@ -249,6 +250,28 @@ public class CurrentUserService {
     }
 
     @SuppressWarnings("unchecked")
+    /**
+     * Ảnh đại diện do nhà cung cấp đăng nhập xã hội cấp (Google, Facebook…).
+     *
+     * Supabase đặt nó trong {@code user_metadata}: Google dùng khoá
+     * {@code avatar_url}, một số provider khác dùng {@code picture}. Tài khoản
+     * đăng ký bằng email không có ảnh — khi đó trả về null và giao diện tự lùi
+     * về chữ cái đầu của tên.
+     */
+    public String avatarUrlFromToken() {
+        Object userMetadata = getJwtClaims().get("user_metadata");
+        if (!(userMetadata instanceof Map<?, ?> metadata)) {
+            return null;
+        }
+        for (String key : new String[] { "avatar_url", "picture" }) {
+            Object value = metadata.get(key);
+            if (value instanceof String url && !url.isBlank()) {
+                return url.trim();
+            }
+        }
+        return null;
+    }
+
     private Map<String, Object> getJwtClaims() {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication instanceof JwtAuthenticationToken jwtAuthenticationToken) {

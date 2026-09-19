@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -29,7 +30,8 @@ public class UserJitProvisioningService {
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public AppUser provisionLocalUserJit(UUID supabaseUserId, String email, String displayName, String authProvider) {
+    public AppUser provisionLocalUserJit(UUID supabaseUserId, String email, String displayName,
+                                        String authProvider, String avatarUrl) {
         UUID userId = UUID.randomUUID();
         log.info("JIT provisioning local database records in new transaction for Supabase user: {} (email: {}, provider: {})", supabaseUserId, email, authProvider);
 
@@ -67,10 +69,14 @@ public class UserJitProvisioningService {
                 values (:userId, 'candidate_free')
                 """, Map.of("userId", userId));
 
+        // avatar_url lấy từ nhà cung cấp đăng nhập xã hội; null nếu đăng ký bằng email.
+        MapSqlParameterSource profileParams = new MapSqlParameterSource()
+                .addValue("userId", userId)
+                .addValue("avatarUrl", avatarUrl);
         jdbcTemplate.update("""
-                insert into profiles (user_id, headline, visibility)
-                values (:userId, 'Ứng viên nextplease', '{}'::jsonb)
-                """, Map.of("userId", userId));
+                insert into profiles (user_id, headline, avatar_url, visibility)
+                values (:userId, 'Ứng viên nextplease', :avatarUrl, '{}'::jsonb)
+                """, profileParams);
 
         jdbcTemplate.update("""
                 insert into wallets (user_id, np_balance, locked_np_balance)

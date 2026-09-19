@@ -138,6 +138,7 @@ public class QuestService {
                     q.title,
                     q.description,
                     q.category,
+                    q.location,
                     q.exp_reward   as "expReward",
                     q.np_reward    as "npReward",
                     q.min_req_rs   as "minReqRs",
@@ -327,6 +328,10 @@ public class QuestService {
         // Only OWNER/MANAGER may create postings (MEMBER is view + review only)
         companyAccessService.assertCanManagePostings(organizerUserId, companyId);
 
+        // Địa điểm: ưu tiên giá trị người đăng nhập vào, nếu để trống thì lấy địa
+        // chỉ đã đăng ký của tổ chức. Không có cả hai thì từ chối.
+        String location = resolveLocation(request.get("location"), companyId);
+
         String category = (String) request.get("category");
         int expReward = expForCategory(category);
         int npReward = request.containsKey("npReward")
@@ -338,10 +343,10 @@ public class QuestService {
 
         UUID questId = jdbcTemplate.queryForObject("""
                 insert into quests
-                    (company_id, created_by, title, description, category, exp_reward, np_reward,
+                    (company_id, created_by, title, description, category, location, exp_reward, np_reward,
                      min_req_rs, capacity, starts_at, ends_at, banner_url, banner_pos, status, content_flag)
                 values
-                    (:companyId, :createdBy, :title, :description, :category, :expReward, :npReward,
+                    (:companyId, :createdBy, :title, :description, :category, :location, :expReward, :npReward,
                      :minReqRs, :capacity, :startsAt::timestamptz, :endsAt::timestamptz, :bannerUrl, :bannerPos, 'PENDING', :contentFlag)
                 returning id
                 """, new MapSqlParameterSource()
@@ -352,6 +357,7 @@ public class QuestService {
                 .addValue("title", request.get("title"))
                 .addValue("description", request.get("description"))
                 .addValue("category", category)
+                .addValue("location", location)
                 .addValue("expReward", expReward)
                 .addValue("npReward", npReward)
                 .addValue("minReqRs", minReqRs)
@@ -382,6 +388,7 @@ public class QuestService {
                     q.id,
                     q.title,
                     q.category,
+                    q.location,
                     q.status,
                     q.rejection_reason as "rejectionReason",
                     q.exp_reward  as "expReward",
@@ -537,6 +544,27 @@ public class QuestService {
 
     // ── private helpers ───────────────────────────────────────────────────────
 
+    /**
+     * Địa điểm của quest: dùng giá trị người đăng nhập vào, nếu bỏ trống thì lấy
+     * địa chỉ đã đăng ký của tổ chức. Tổ chức chưa khai địa chỉ và cũng không
+     * nhập thì báo lỗi thay vì lưu quest không có địa điểm.
+     */
+    private String resolveLocation(Object rawLocation, UUID companyId) {
+        String location = rawLocation == null ? "" : String.valueOf(rawLocation).trim();
+        if (location.isBlank()) {
+            location = jdbcTemplate.queryForObject(
+                    "select coalesce(address, '') from companies where id = :id",
+                    Map.of("id", companyId), String.class);
+            location = location == null ? "" : location.trim();
+        }
+        if (location.isBlank()) {
+            throw new AppException(HttpStatus.BAD_REQUEST,
+                    "Vui lòng nhập địa điểm, hoặc cập nhật địa chỉ tổ chức trong hồ sơ trước khi đăng.");
+        }
+        if (location.length() > 200) location = location.substring(0, 200);
+        return location;
+    }
+
     private Map<String, Object> fetchQuestOrThrow(UUID questId) {
         try {
             return jdbcTemplate.queryForMap("""
@@ -582,7 +610,7 @@ public class QuestService {
         verifyQuestOwnership(questId, userId);
         try {
             Map<String, Object> quest = jdbcTemplate.queryForMap("""
-                    select id, title, description, category, status, exp_reward as "expReward",
+                    select id, title, description, category, location, status, exp_reward as "expReward",
                            min_req_rs as "minReqRs", capacity, ends_at as "endsAt",
                            banner_url as "bannerUrl", banner_pos as "bannerPos", rejection_reason as "rejectionReason"
                     from quests
@@ -609,6 +637,7 @@ public class QuestService {
                 set title       = coalesce(:title, title),
                     description = coalesce(:description, description),
                     category    = coalesce(:category, category),
+                    location    = coalesce(:location, location),
                     min_req_rs  = coalesce(:minReqRs, min_req_rs),
                     capacity    = coalesce(:capacity, capacity),
                     ends_at     = coalesce(cast(:endsAt as timestamptz), ends_at),
@@ -621,6 +650,8 @@ public class QuestService {
                 .addValue("title",       request.get("title"))
                 .addValue("description", request.get("description"))
                 .addValue("category",    request.get("category"))
+                .addValue("location",    request.containsKey("location")
+                        ? resolveLocation(request.get("location"), getQuestCompanyId(questId)) : null)
                 .addValue("minReqRs",    request.get("minReqRs"))
                 .addValue("capacity",    request.get("capacity"))
                 .addValue("endsAt",      request.get("endsAt"))

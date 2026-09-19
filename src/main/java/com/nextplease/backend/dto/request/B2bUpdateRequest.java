@@ -7,6 +7,8 @@ import jakarta.validation.constraints.Size;
 public record B2bUpdateRequest(
         @NotBlank @Size(max = 200) String companyName,
         @NotBlank @Size(max = 50) String companyType, // SME, STARTUP, CLUB, etc.
+        @NotBlank(message = "Vui lòng nhập địa chỉ của tổ chức")
+        @Size(max = 300) String address,
         @NotBlank @Size(min = 30, message = "Mô tả tổ chức phải có tối thiểu 30 ký tự") String description,
         String websiteUrl,
         String logoUrl,
