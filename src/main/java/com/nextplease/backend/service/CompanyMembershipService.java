@@ -196,15 +196,45 @@ public class CompanyMembershipService {
         String companyName = jdbcTemplate.queryForObject(
                 "select name from companies where id = :id",
                 Map.of("id", invite.get("company_id")), String.class);
-        Integer existing = jdbcTemplate.queryForObject(
-                "select count(*) from app_users where lower(email) = :email",
-                Map.of("email", invitedEmail), Integer.class);
-        boolean isNewUser = existing == null || existing == 0;
+        boolean isNewUser = !hasLoginAccount(invitedEmail);
         return Map.of(
                 "invitedEmail", invitedEmail,
                 "companyName", companyName,
                 "nodeRole", invite.get("node_role"),
                 "isNewUser", isNewUser);
+    }
+
+
+    /* ── "Người này có đăng nhập được không" ────────────────────────────────
+       Câu hỏi quyết định cả luồng nhận lời mời, và trước đây bị trả lời sai:
+       code cũ chỉ đếm app_users. Nhưng app_users chỉ là bản ghi phía ứng dụng —
+       thứ cho phép ĐĂNG NHẬP nằm ở auth.users của Supabase, và hai bên lệch
+       nhau được:
+
+         A. app_users còn, auth.users mất (ai đó xoá user trong Supabase
+            Dashboard). Code cũ kết luận "đã có tài khoản" → giao diện bảo
+            "hãy đăng nhập" → nhưng không còn gì để đăng nhập. Ngõ cụt, và
+            đây chính là lỗi đang gặp.
+         B. auth.users còn, app_users mất (registerAndAccept vỡ giữa chừng:
+            phương thức có @Transactional nên DB bị roll back, nhưng user
+            Supabase đã tạo qua HTTP thì không roll back được). Code cũ kết
+            luận "người mới" → createUser báo email đã tồn tại → lỗi.
+
+       Nên phải hỏi thẳng auth.users. Nếu vai DB không đọc được schema đó thì
+       quay về cách đếm cũ — sai ở ca hiếm còn hơn chết cả luồng. */
+    private boolean hasLoginAccount(String email) {
+        try {
+            Integer n = jdbcTemplate.queryForObject("""
+                    select count(*) from auth.users where lower(email) = :email
+                    """, Map.of("email", email), Integer.class);
+            return n != null && n > 0;
+        } catch (Exception e) {
+            log.warn("Không đọc được auth.users, tạm xét theo app_users: {}", e.getMessage());
+            Integer n = jdbcTemplate.queryForObject(
+                    "select count(*) from app_users where lower(email) = :email",
+                    Map.of("email", email), Integer.class);
+            return n != null && n > 0;
+        }
     }
 
     /** Logged-in user redeems an invitation token to join the company. */
@@ -237,13 +267,18 @@ public class CompanyMembershipService {
         Map<String, Object> invite = loadRedeemableInvite(rawToken);
         String invitedEmail = (String) invite.get("invited_email");
 
-        Integer existing = jdbcTemplate.queryForObject(
-                "select count(*) from app_users where lower(email) = :email",
-                Map.of("email", invitedEmail), Integer.class);
-        if (existing != null && existing > 0) {
+        if (hasLoginAccount(invitedEmail)) {
             throw new AppException(HttpStatus.CONFLICT,
                     "Email này đã có tài khoản. Vui lòng đăng nhập để chấp nhận lời mời.");
         }
+
+        /* Không còn tài khoản đăng nhập, nhưng dòng app_users có thể vẫn nằm đó
+           (ca A ở trên). Phải hàn lại chứ không chèn mới: app_users.email có
+           ràng buộc unique, chèn mới sẽ vỡ và người được mời mắc kẹt vĩnh viễn. */
+        UUID staleUserId = jdbcTemplate.query(
+                "select id from app_users where lower(email) = :email limit 1",
+                Map.of("email", invitedEmail),
+                rs -> rs.next() ? rs.getObject("id", UUID.class) : null);
 
         boolean isClub = "CLUB".equals(jdbcTemplate.queryForObject(
                 "select company_type from companies where id = :id",
@@ -254,19 +289,37 @@ public class CompanyMembershipService {
                 invitedEmail, password,
                 Map.of("display_name", invitedEmail.split("@")[0]));
 
-        // 2. Create the local app_user + profile.
-        UUID userId = UUID.randomUUID();
-        jdbcTemplate.update("""
-                insert into app_users (id, supabase_user_id, email, display_name, status, auth_provider, created_at, updated_at)
-                values (:id, :supabaseUserId, :email, :displayName, 'ACTIVE', 'supabase', now(), now())
-                """, Map.of(
-                "id", userId,
-                "supabaseUserId", supabaseUserId,
-                "email", invitedEmail,
-                "displayName", invitedEmail.split("@")[0]));
+        // 2. Create the local app_user + profile — hoặc hàn lại dòng cũ.
+        UUID userId = staleUserId != null ? staleUserId : UUID.randomUUID();
+        if (staleUserId != null) {
+            /* Trỏ dòng cũ sang tài khoản đăng nhập vừa tạo, và gỡ mọi dấu vết
+               đã-xoá: nếu trước đó tài khoản bị admin xoá mềm thì người được
+               mời phải sống lại được, không thì họ đăng nhập xong vẫn bị coi
+               như đã xoá. */
+            jdbcTemplate.update("""
+                    update app_users
+                    set supabase_user_id = :supabaseUserId,
+                        status = 'ACTIVE',
+                        deleted_at = null,
+                        auth_provider = 'supabase',
+                        updated_at = now()
+                    where id = :id
+                    """, Map.of("id", userId, "supabaseUserId", supabaseUserId));
+        } else {
+            jdbcTemplate.update("""
+                    insert into app_users (id, supabase_user_id, email, display_name, status, auth_provider, created_at, updated_at)
+                    values (:id, :supabaseUserId, :email, :displayName, 'ACTIVE', 'supabase', now(), now())
+                    """, Map.of(
+                    "id", userId,
+                    "supabaseUserId", supabaseUserId,
+                    "email", invitedEmail,
+                    "displayName", invitedEmail.split("@")[0]));
+        }
+        /* on conflict do nothing: dòng cũ được hàn lại thì profile đã có sẵn. */
         jdbcTemplate.update("""
                 insert into profiles (user_id, headline, visibility)
                 values (:userId, :headline, '{}'::jsonb)
+                on conflict (user_id) do nothing
                 """, Map.of(
                 "userId", userId,
                 "headline", isClub ? "Câu lạc bộ / Tổ chức" : "Doanh nghiệp tuyển dụng"));
