@@ -9,6 +9,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -28,6 +30,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class DiscussionService {
 
+    private static final Logger log = LoggerFactory.getLogger(DiscussionService.class);
+
     /** Số bình luận mới nhất trả kèm mỗi bài trong feed; phần còn lại tải riêng. */
     private static final int PREVIEW_COMMENTS = 3;
     private static final int MAX_POLL_OPTIONS = 6;
@@ -35,13 +39,16 @@ public class DiscussionService {
     private final CurrentUserService currentUserService;
     private final ContentModerationService moderationService;
     private final NamedParameterJdbcTemplate jdbcTemplate;
+    private final NotificationService notificationService;
 
     public DiscussionService(CurrentUserService currentUserService,
                              ContentModerationService moderationService,
-                             NamedParameterJdbcTemplate jdbcTemplate) {
+                             NamedParameterJdbcTemplate jdbcTemplate,
+                             NotificationService notificationService) {
         this.currentUserService = currentUserService;
         this.moderationService = moderationService;
         this.jdbcTemplate = jdbcTemplate;
+        this.notificationService = notificationService;
     }
 
     // ── Người dùng hiện tại ───────────────────────────────────────────────────
@@ -375,6 +382,47 @@ public class DiscussionService {
                 Map.of("id", postId));
     }
 
+
+    /**
+     * Báo cho tác giả bài viết rằng có người vừa tương tác.
+     *
+     * Ba điều được xử lý ở đây chứ không ở nơi gọi, vì cả bình luận lẫn lượt
+     * thích đều cần đúng ba điều đó:
+     *
+     *   1. KHÔNG tự báo cho chính mình. Tự bình luận vào bài của mình là
+     *      chuyện bình thường (trả lời người khác), và nhận thông báo về hành
+     *      động mình vừa làm chỉ làm chuông kêu vô nghĩa.
+     *   2. Lấy tên người tương tác theo đúng công thức mà feed đang dùng —
+     *      display_name, thiếu thì lấy phần trước @ của email — để tên trong
+     *      thông báo trùng với tên hiển thị dưới bài.
+     *   3. Fail-soft. notify() đã không bao giờ ném, nhưng hai truy vấn tra
+     *      cứu ở đây thì có; bọc lại để một bài bị xoá giữa chừng không làm
+     *      hỏng cả giao dịch thêm bình luận.
+     */
+    private void notifyPostAuthor(UUID postId, UUID actorId, String type,
+                                  String title, java.util.function.Function<String, String> body) {
+        try {
+            Map<String, Object> row = jdbcTemplate.queryForMap("""
+                    select p.author_user_id as "authorId",
+                           coalesce(nullif(btrim(a.display_name), ''),
+                                    split_part(a.email, '@', 1)) as "actorName"
+                    from discussion_posts p
+                    cross join app_users a
+                    where p.id = :postId and a.id = :actorId
+                    """, Map.of("postId", postId, "actorId", actorId));
+
+            UUID authorId = (UUID) row.get("authorId");
+            if (authorId == null || authorId.equals(actorId)) return;
+
+            notificationService.notify(authorId, type, title,
+                    body.apply(String.valueOf(row.get("actorName"))),
+                    "/discussions/" + postId);
+        } catch (Exception e) {
+            log.warn("[DiscussionService] Không gửi được thông báo {} cho bài {}: {}",
+                    type, postId, e.getMessage());
+        }
+    }
+
     // ── Tương tác ─────────────────────────────────────────────────────────────
 
     /** Bật/tắt lượt thích. Trả về trạng thái và tổng số lượt sau khi đổi. */
@@ -392,6 +440,15 @@ public class DiscussionService {
                     values (:postId, :userId)
                     on conflict do nothing
                     """, Map.of("postId", postId, "userId", userId));
+        }
+
+        // Chỉ báo khi VỪA THÍCH, không báo khi bỏ thích. Người ta bấm nhầm rồi
+        // bấm lại là chuyện thường; bắn hai thông báo cho một lần lỡ tay là
+        // cách nhanh nhất khiến người dùng tắt hết thông báo.
+        if (removed == 0) {
+            notifyPostAuthor(postId, userId, "DISCUSSION_LIKE",
+                    "Bài của bạn được thích",
+                    actor -> actor + " vừa thích bài viết của bạn.");
         }
 
         Integer total = jdbcTemplate.queryForObject(
@@ -481,6 +538,10 @@ public class DiscussionService {
                 .addValue("userId", userId)
                 .addValue("content", body)
                 .addValue("contentFlag", moderationService.containsProfanity(body)), UUID.class);
+
+        notifyPostAuthor(postId, userId, "DISCUSSION_COMMENT",
+                "Có người bình luận bài của bạn",
+                actor -> actor + " vừa bình luận bài viết của bạn.");
 
         return jdbcTemplate.queryForMap("""
                 select cm.id,
