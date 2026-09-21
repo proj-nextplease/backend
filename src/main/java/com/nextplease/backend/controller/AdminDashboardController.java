@@ -85,12 +85,79 @@ public class AdminDashboardController {
      * GET /api/v1/admin/dashboard/stats
      * Returns overall system statistics counters.
      */
+    /* Điều kiện "tài khoản còn tồn tại", dùng chung cho mọi truy vấn trong
+       trang admin. Bí danh bảng phải là `u`.
+
+       Có BA kiểu tài khoản đã biến mất mà vẫn để lại dòng trong app_users:
+         1. xoá mềm qua admin  → status='DELETED', deleted_at có giá trị;
+         2. bị khoá vĩnh viễn  → không tính là xoá, vẫn phải hiện;
+         3. xoá thẳng bên Supabase Auth → dòng app_users KHÔNG hề bị đụng tới.
+
+       Kiểu 3 chỉ phát hiện được bằng cách đọc chéo sang schema `auth` của
+       Supabase. Người đó không còn đăng nhập được nữa, nên để họ nằm trong
+       danh sách và trong các con số thống kê là sai — admin sẽ đếm nhầm. */
+    private static final String LIVE_USER = "u.status <> 'DELETED' and u.deleted_at is null";
+
+    /* supabase_user_id NULL = tài khoản seed bằng script, chưa từng gắn Auth.
+       Không phải mồ côi, nên vẫn tính là còn tồn tại. */
+    private static final String AUTH_EXISTS =
+            "(u.supabase_user_id is null"
+            + " or exists (select 1 from auth.users a where a.id = u.supabase_user_id))";
+
+    /* Vai DB mặc định ở đây là `postgres` nên đọc được schema `auth`. Nhưng môi
+       trường khác có thể dùng vai hẹp hơn, hoặc chạy Postgres thường không có
+       schema đó — cả hai đều không được làm sập trang admin. Dò một lần rồi
+       nhớ kết quả: nếu không đọc được thì bỏ qua vế kiểm tra Auth, danh sách
+       quay về hành vi cũ chứ không lỗi. */
+    private volatile Boolean authSchemaReadable;
+
+    private boolean canReadAuthSchema() {
+        Boolean cached = authSchemaReadable;
+        if (cached != null) return cached;
+        boolean ok;
+        try {
+            ok = Boolean.TRUE.equals(jdbcTemplate.queryForObject(
+                    "select to_regclass('auth.users') is not null", Map.of(), Boolean.class))
+                 && jdbcTemplate.queryForObject(
+                    "select count(*) from auth.users", Map.of(), Long.class) != null;
+        } catch (Exception e) {
+            log.warn("Không đọc được auth.users, bỏ qua bước loại tài khoản mồ côi: {}", e.getMessage());
+            ok = false;
+        }
+        authSchemaReadable = ok;
+        return ok;
+    }
+
+    /* Danh sách người dùng KHÔNG dùng liveUser(): tài khoản xoá mềm vẫn phải
+       liệt kê được (admin có nút bật/tắt xem chúng). Chỉ loại tài khoản mồ côi,
+       vì với chúng thì không còn gì để admin thao tác. */
+    private String authExistsClause() {
+        return canReadAuthSchema() ? AUTH_EXISTS : "true";
+    }
+
+    /** Vế WHERE loại mọi tài khoản đã xoá, kể cả xoá thẳng bên Supabase Auth. */
+    private String liveUser() {
+        return canReadAuthSchema() ? LIVE_USER + " and " + AUTH_EXISTS : LIVE_USER;
+    }
+
     @GetMapping("/stats")
     public ApiResponse<Map<String, Object>> getStats() {
         requireAdmin();
 
+        /* count(DISTINCT user_id), không phải count(*).
+           user_roles có khoá chính (user_id, role_code) nên một người giữ cả
+           candidate_free lẫn candidate_premium sẽ thành HAI dòng và bị đếm hai
+           lần. Hiện premium theo dõi bằng app_users.premium_until nên chưa xảy
+           ra, nhưng đếm số dòng vai trò rồi gọi nó là "số ứng viên" thì sai
+           đơn vị ngay từ đầu.
+           Và phải join app_users để loại tài khoản đã xoá: nút "Xoá tài khoản"
+           của admin là XOÁ MỀM (status='DELETED'), nó KHÔNG gỡ vai trò — nên
+           người đã xoá vẫn nằm nguyên trong user_roles. */
         Integer totalCandidates = jdbcTemplate.queryForObject(
-                "select count(*) from user_roles where role_code in ('candidate_free', 'candidate_premium')",
+                "select count(distinct ur.user_id) from user_roles ur "
+                        + "join app_users u on u.id = ur.user_id "
+                        + "where ur.role_code in ('candidate_free', 'candidate_premium') "
+                        + "  and " + liveUser(),
                 Map.of(),
                 Integer.class
         );
@@ -164,8 +231,9 @@ public class AdminDashboardController {
         // Xu hướng: người dùng mới 7 ngày gần nhất (theo giờ VN)
         Map<String, Integer> signupMap = new java.util.HashMap<>();
         for (Map<String, Object> r : jdbcTemplate.queryForList(
-                "select to_char(created_at at time zone 'Asia/Ho_Chi_Minh','YYYY-MM-DD') as d, count(*) as c " +
-                "from app_users where created_at >= now() - interval '7 days' group by d", Map.of())) {
+                "select to_char(u.created_at at time zone 'Asia/Ho_Chi_Minh','YYYY-MM-DD') as d, count(*) as c " +
+                "from app_users u where u.created_at >= now() - interval '7 days' and " + liveUser()
+                + " group by d", Map.of())) {
             signupMap.put((String) r.get("d"), ((Number) r.get("c")).intValue());
         }
         java.util.List<Map<String, Object>> signupsLast7Days = new java.util.ArrayList<>();
@@ -181,8 +249,9 @@ public class AdminDashboardController {
 
         // So sánh: người dùng mới 7 ngày trước đó (để tính % tăng trưởng)
         Integer signupsPrevious7Days = jdbcTemplate.queryForObject(
-                "select count(*) from app_users " +
-                "where created_at >= now() - interval '14 days' and created_at < now() - interval '7 days'",
+                "select count(*) from app_users u " +
+                "where u.created_at >= now() - interval '14 days' and u.created_at < now() - interval '7 days' " +
+                "  and " + liveUser(),
                 Map.of(),
                 Integer.class
         );
@@ -191,13 +260,18 @@ public class AdminDashboardController {
         // Tăng trưởng theo kỳ: số bản ghi MỚI trong 7 ngày gần nhất so với 7 ngày liền trước.
         // FE dùng cặp {last7, prev7} này để hiển thị mũi tên +/-% trên từng thẻ KPI.
         Map<String, Object> deltas = new java.util.LinkedHashMap<>();
+        /* Mỗi mũi tên % phải đo ĐÚNG tập mà con số bên cạnh nó đang đếm.
+           Trước đây thẻ SME đếm company_type='SME' AND verification_status='APPROVED'
+           còn phần trăm của nó lại tính company_type='SME' không lọc APPROVED —
+           mũi tên nhảy trong khi con số đứng yên. */
         deltas.put("candidates", growthWindow(
                 "app_users u join user_roles ur on ur.user_id = u.id " +
-                "where ur.role_code in ('candidate_free','candidate_premium')", "u.created_at", true));
+                "where ur.role_code in ('candidate_free','candidate_premium') and " + liveUser(),
+                "u.created_at", true));
         deltas.put("companies", growthWindow(
-                "companies where company_type = 'SME'", "created_at", false));
+                "companies where company_type = 'SME' and verification_status = 'APPROVED'", "created_at", false));
         deltas.put("clubs", growthWindow(
-                "companies where company_type = 'CLUB'", "created_at", false));
+                "companies where company_type = 'CLUB' and verification_status = 'APPROVED'", "created_at", false));
         deltas.put("jobs", growthWindow(
                 "jobs where deleted_at is null", "created_at", false));
         deltas.put("quests", growthWindow(
@@ -282,27 +356,45 @@ public class AdminDashboardController {
     public ApiResponse<List<Map<String, Object>>> getUsers() {
         MeResponse currentAdmin = requireAdmin();
 
+        /* KHÔNG join thẳng sang user_roles và companies rồi group by.
+           Cách đó tạo tích Descartes: một người sở hữu N tổ chức sẽ nhân số
+           dòng vai trò lên N lần, và vì group by có cả c.verification_status
+           với c.company_type nên chính người đó còn bị TÁCH THÀNH NHIỀU DÒNG
+           khi các tổ chức của họ khác trạng thái.
+           Quan sát được trên dữ liệu thật: admin1@nextplease.vn hiện hai lần,
+           một dòng roles = "admin", dòng kia = "admin, admin, admin, admin,
+           admin" — năm lần cùng một vai trò, đúng bằng số tổ chức trong nhóm.
+           Dùng truy vấn con: mỗi app_users cho đúng một dòng, dù sở hữu bao
+           nhiêu tổ chức. */
         List<Map<String, Object>> users = jdbcTemplate.queryForList("""
                 select u.id,
                        u.email,
                        u.display_name as "displayName",
                        u.status as "userStatus",
-                       c.verification_status as "companyStatus",
-                       c.company_type as "companyType",
                        u.created_at as "createdAt",
                        u.auth_provider as "authProvider",
                        u.student_email_verified as "studentEmailVerified",
                        u.premium_until as "premiumUntil",
                        u.last_login_at as "lastLoginAt",
-                       coalesce(
-                           string_agg(ur.role_code, ', '),
-                           'none'
-                       ) as "roles"
+                       u.deleted_at as "deletedAt",
+                       coalesce((
+                           select string_agg(distinct ur.role_code, ', ')
+                           from user_roles ur where ur.user_id = u.id
+                       ), 'none') as "roles",
+                       (select count(*) from companies c where c.owner_user_id = u.id) as "companyCount",
+                       -- Tổ chức mới nhất làm đại diện; companyCount cho biết còn tổ chức khác.
+                       (select c.verification_status from companies c
+                        where c.owner_user_id = u.id
+                        order by c.created_at desc nulls last limit 1) as "companyStatus",
+                       (select c.company_type from companies c
+                        where c.owner_user_id = u.id
+                        order by c.created_at desc nulls last limit 1) as "companyType"
                 from app_users u
-                left join user_roles ur on u.id = ur.user_id
-                left join companies c on u.id = c.owner_user_id
-                group by u.id, u.email, u.display_name, u.status, c.verification_status, c.company_type, u.created_at, u.auth_provider, u.student_email_verified, u.premium_until, u.last_login_at
-                order by u.created_at desc
+                where """ + authExistsClause() + """
+                /* Tài khoản đã xoá xuống cuối. KHÔNG loại hẳn: admin vẫn cần
+                   tra được ai đã bị xoá và lúc nào. Việc giấu chúng khỏi danh
+                   sách mặc định do FE lo, bằng deletedAt/userStatus. */
+                order by (u.status = 'DELETED' or u.deleted_at is not null), u.created_at desc
                 """, Map.of());
 
         try {

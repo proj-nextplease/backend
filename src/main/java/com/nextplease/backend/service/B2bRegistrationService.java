@@ -42,6 +42,47 @@ public class B2bRegistrationService {
         this.notificationService = notificationService;
     }
 
+    /* ── Ràng buộc giấy tờ Việt Nam ──────────────────────────────────────────
+       Bản sao phía server của FE/src/lib/vnValidation.js. Phải có ở cả hai
+       phía: kiểm tra ở trình duyệt chỉ để báo lỗi cho người dùng sớm, ai gọi
+       thẳng API thì không đi qua đó.
+
+       MST theo Thông tư 105/2020/TT-BTC có đúng hai dạng: 10 chữ số, hoặc
+       10 chữ số + '-' + 3 chữ số cho đơn vị trực thuộc. Không có dạng 11, 12
+       hay 14 ký tự — lưu ý CCCD là 12 chữ số nên rất hay bị gõ nhầm vào đây.
+
+       Số di động Việt Nam có ĐÚNG 10 chữ số kể từ đợt chuyển đổi đầu số 2018;
+       các số 11 chữ số cũ không còn tồn tại. Đầu số hợp lệ: 03/05/07/08/09
+       (di động) và 02 (cố định). */
+    private static final java.util.regex.Pattern TAX_CODE_PATTERN =
+            java.util.regex.Pattern.compile("^\\d{10}(-\\d{3})?$");
+    private static final java.util.regex.Pattern PHONE_PATTERN =
+            java.util.regex.Pattern.compile("^0[235789]\\d{8}$");
+
+    private static void requireValidTaxCode(String raw) {
+        if (raw == null || raw.isBlank()) return;   // để trống là hợp lệ; nơi gọi tự quyết bắt buộc hay không
+        String v = raw.trim();
+        if (TAX_CODE_PATTERN.matcher(v).matches()) return;
+        if (v.replaceAll("\\D", "").length() == 12) {
+            throw new AppException(HttpStatus.BAD_REQUEST,
+                    "Mã số thuế phải có 10 chữ số. Chuỗi 12 số bạn vừa nhập là định dạng CCCD — hãy kiểm tra lại.");
+        }
+        throw new AppException(HttpStatus.BAD_REQUEST,
+                "Mã số thuế không hợp lệ: phải là 10 chữ số, hoặc 10 chữ số + \"-\" + 3 chữ số nếu là đơn vị trực thuộc.");
+    }
+
+    private static void requireValidPhone(String raw, String label) {
+        if (raw == null || raw.isBlank()) {
+            throw new AppException(HttpStatus.BAD_REQUEST, label + " không được để trống.");
+        }
+        String v = raw.trim().replaceAll("\\D", "");
+        if (v.startsWith("84") && v.length() >= 11) v = "0" + v.substring(2);
+        if (!PHONE_PATTERN.matcher(v).matches()) {
+            throw new AppException(HttpStatus.BAD_REQUEST, label
+                    + " không hợp lệ: phải có đúng 10 chữ số và bắt đầu bằng 03, 05, 07, 08, 09 (di động) hoặc 02 (cố định).");
+        }
+    }
+
     @Transactional
     public void registerB2b(B2bRegistrationRequest request) {
         String normalizedEmail = request.email().trim().toLowerCase();
@@ -56,6 +97,9 @@ public class B2bRegistrationService {
         if (existingCount != null && existingCount > 0) {
             throw new AppException(HttpStatus.CONFLICT, "Email này đã được đăng ký trên hệ thống.");
         }
+
+        requireValidPhone(request.representativePhone(), "Số điện thoại người đại diện");
+        requireValidTaxCode(request.taxCode());
 
         // 1.5. Ensure taxCode is not already registered and approved
         if (request.taxCode() != null && !request.taxCode().isBlank()) {
@@ -350,6 +394,9 @@ public class B2bRegistrationService {
     public void updateCompanyProfile(UUID userId, B2bUpdateRequest request) {
         log.info("Updating B2B company profile for user: {}", userId);
         UUID companyId = resolveManagedCompanyId(userId);
+
+        requireValidPhone(request.representativePhone(), "Số điện thoại người đại diện");
+        requireValidTaxCode(request.taxCode());
 
         UUID schoolUuid = null;
         if (request.schoolId() != null && !request.schoolId().isBlank()) {
