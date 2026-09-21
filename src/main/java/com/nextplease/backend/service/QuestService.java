@@ -147,6 +147,10 @@ public class QuestService {
                     q.ends_at      as "endsAt",
                     q.banner_url   as "bannerUrl",
                     q.banner_pos   as "bannerPos",
+                    -- Trang /jobs trộn quest chung danh sách với tin tuyển dụng và hiển
+                    -- thị "đăng cách đây bao lâu". Thiếu cột này thì FE không tính được
+                    -- và buộc phải hiện một mốc thời gian bịa.
+                    q.created_at   as "createdAt",
                     q.status,
                     c.id           as "companyId",
                     c.name         as "companyName",
