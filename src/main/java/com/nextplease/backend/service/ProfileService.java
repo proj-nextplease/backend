@@ -42,6 +42,7 @@ public class ProfileService {
     private final ConfigService configService;
     private final UserJitProvisioningService userJitProvisioningService;
     private final CurrentUserService currentUserService;
+    private final LegalConsentService legalConsentService;
     private final boolean jwtEnabled;
 
     public ProfileService(
@@ -51,6 +52,7 @@ public class ProfileService {
             ConfigService configService,
             UserJitProvisioningService userJitProvisioningService,
             CurrentUserService currentUserService,
+            LegalConsentService legalConsentService,
             @Value("${app.security.jwt.enabled:false}") boolean jwtEnabled
     ) {
         this.jdbcTemplate = jdbcTemplate;
@@ -59,6 +61,7 @@ public class ProfileService {
         this.configService = configService;
         this.userJitProvisioningService = userJitProvisioningService;
         this.currentUserService = currentUserService;
+        this.legalConsentService = legalConsentService;
         this.jwtEnabled = jwtEnabled;
     }
 
@@ -185,13 +188,45 @@ public class ProfileService {
                         "np_balance", 0L
                 );
             } catch (org.springframework.dao.DataIntegrityViolationException dive) {
-                log.info("Concurrent JIT provisioning detected in ProfileService.getPortfolio for user {}. Querying existing user details.", supabaseUserId);
-                user = jdbcTemplate.queryForMap("""
-                        select u.id, u.display_name, u.email, coalesce(w.np_balance, 0) as np_balance
+                /* app_users có HAI ràng buộc duy nhất: supabase_user_id và email.
+                   Khối này trước đây mặc định vi phạm luôn là supabase_user_id
+                   ("ai đó vừa tạo song song") rồi truy lại theo đúng cột đó.
+                   Khi thứ bị vi phạm là EMAIL thì truy vấn ra 0 dòng và ném
+                   EmptyResultDataAccessException — người dùng nhận 503
+                   "Database is temporarily unavailable", một thông báo vừa sai
+                   vừa không chỉ ra được việc cần làm. */
+                List<Map<String, Object>> existing = jdbcTemplate.queryForList("""
+                        select u.id, u.display_name, u.email, u.supabase_user_id,
+                               coalesce(w.np_balance, 0) as np_balance
                         from app_users u
                         left join wallets w on w.user_id = u.id
                         where u.supabase_user_id = :supabaseUserId
                         """, Map.of("supabaseUserId", supabaseUserId));
+
+                if (!existing.isEmpty()) {
+                    log.info("Concurrent JIT provisioning detected for {}. Reusing existing row.", supabaseUserId);
+                    user = existing.get(0);
+                } else {
+                    /* Không phải tạo song song. Đụng email: đã có tài khoản khác
+                       mang đúng email này. Xảy ra khi người dùng bị xoá khỏi
+                       Supabase Auth rồi đăng nhập lại (sinh supabase_user_id
+                       mới) trong khi dòng app_users cũ vẫn còn.
+                       Nói thẳng ra thay vì để nó thành 503 khó hiểu. */
+                    List<Map<String, Object>> byEmail = jdbcTemplate.queryForList(
+                            "select id, supabase_user_id from app_users where lower(btrim(email)) = lower(btrim(:email))",
+                            Map.of("email", email == null ? "" : email));
+
+                    if (!byEmail.isEmpty()) {
+                        throw new com.nextplease.backend.exception.AppException(
+                                org.springframework.http.HttpStatus.CONFLICT,
+                                "Email " + email + " đã gắn với một tài khoản khác (app_users.id="
+                                + byEmail.get(0).get("id") + ", supabase_user_id="
+                                + byEmail.get(0).get("supabase_user_id")
+                                + "). Tài khoản Supabase hiện tại là " + supabaseUserId
+                                + ". Xoá dòng app_users cũ, hoặc trỏ supabase_user_id của nó sang giá trị mới.");
+                    }
+                    throw dive;
+                }
             }
         }
 
@@ -305,7 +340,8 @@ public class ProfileService {
                 selectedTheme,
                 themeUnlocked,
                 openToWork,
-                socialLinks
+                socialLinks,
+                legalConsentService.latestAcceptedVersion(userId)
         );
     }
 
