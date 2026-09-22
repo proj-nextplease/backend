@@ -412,14 +412,29 @@ public class DiscussionService {
                     """, Map.of("postId", postId, "actorId", actorId));
 
             UUID authorId = (UUID) row.get("authorId");
-            if (authorId == null || authorId.equals(actorId)) return;
+            if (authorId == null) {
+                log.warn("[thông báo] {} bỏ qua: bài {} không có tác giả", type, postId);
+                return;
+            }
+            if (authorId.equals(actorId)) {
+                // Không phải lỗi — tự tương tác với bài của mình thì không báo.
+                // Vẫn ghi lại vì đây là lý do phổ biến nhất khiến người ta
+                // tưởng thông báo hỏng.
+                log.info("[thông báo] {} bỏ qua: tác giả tự tương tác (bài {})",
+                        type, postId);
+                return;
+            }
 
             notificationService.notify(authorId, type, title,
                     body.apply(String.valueOf(row.get("actorName"))),
                     "/discussions/" + postId);
+            log.info("[thông báo] đã tạo {} cho người dùng {} (bài {})",
+                    type, authorId, postId);
         } catch (Exception e) {
-            log.warn("[DiscussionService] Không gửi được thông báo {} cho bài {}: {}",
-                    type, postId, e.getMessage());
+            // Ghi cả stack trace. Bản trước chỉ ghi getMessage(), nên khi lỗi
+            // thật xảy ra thì dòng log không đủ để biết hỏng ở đâu — đúng tình
+            // huống đã gặp.
+            log.warn("[thông báo] KHÔNG gửi được {} cho bài {}", type, postId, e);
         }
     }
 
