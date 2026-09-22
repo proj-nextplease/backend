@@ -157,7 +157,7 @@ public class CandidateRegistrationService {
         CandidateRegistrationAttempt attempt = findAttemptForUpdate(request.registrationId());
 
         if (!"PENDING".equals(attempt.status())) {
-            throw new AppException(HttpStatus.BAD_REQUEST, "Registration attempt is not pending");
+            throw new AppException(HttpStatus.BAD_REQUEST, "Yêu cầu đăng ký này không còn hiệu lực. Hãy bắt đầu lại.");
         }
 
         if (attempt.expiresAt().isBefore(Instant.now())) {
@@ -182,7 +182,7 @@ public class CandidateRegistrationService {
                     "status", nextStatus,
                     "id", attempt.id()
             ));
-            throw new AppException(HttpStatus.BAD_REQUEST, "Invalid registration OTP");
+            throw new AppException(HttpStatus.BAD_REQUEST, "Mã xác nhận không đúng hoặc đã hết hạn.");
         }
 
         ensureCandidateDoesNotExist(attempt.email());
@@ -310,7 +310,7 @@ public class CandidateRegistrationService {
         ), Integer.class);
 
         if (existingCount != null && existingCount > 0) {
-            throw new AppException(HttpStatus.CONFLICT, "Candidate account already exists");
+            throw new AppException(HttpStatus.CONFLICT, "Email này đã có tài khoản. Hãy đăng nhập hoặc dùng email khác.");
         }
     }
 
@@ -367,7 +367,7 @@ public class CandidateRegistrationService {
                     rs.getTimestamp("expires_at").toInstant()
             ));
         } catch (EmptyResultDataAccessException exception) {
-            throw new AppException(HttpStatus.NOT_FOUND, "Registration attempt not found");
+            throw new AppException(HttpStatus.NOT_FOUND, "Không tìm thấy yêu cầu đăng ký. Hãy bắt đầu lại.");
         }
     }
 
