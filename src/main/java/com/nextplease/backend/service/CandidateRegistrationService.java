@@ -16,6 +16,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.HexFormat;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -73,7 +74,10 @@ public class CandidateRegistrationService {
     @Transactional
     public CandidateRegistrationOtpResponse requestOtp(CandidateRegistrationOtpRequest request) {
         String normalizedEmail = normalizeEmail(request.email());
-        String normalizedStudentEmail = normalizeEmail(request.studentEmail());
+        // Rỗng thành NULL, không phải chuỗi rỗng: cột này giờ nullable, và lưu ""
+        // sẽ khiến mọi chỗ đọc sau này phải nhớ kiểm tra cả hai dạng "không có".
+        String normalizedStudentEmail =
+                blankToNull(normalizeEmail(request.studentEmail()));
         ensureCandidateDoesNotExist(normalizedEmail);
 
         // Enforce cooldown: reject if a PENDING attempt was created less than OTP_COOLDOWN_SECONDS ago
@@ -193,14 +197,20 @@ public class CandidateRegistrationService {
         }
 
         // --- Create Supabase auth user server-side (email already confirmed, no email sent) ---
+        // Map.of NÉM NullPointerException nếu bất kỳ giá trị nào null, mà
+        // student_email giờ có thể null. Dùng HashMap và chỉ đặt khoá khi có
+        // giá trị — metadata thiếu khoá thì rõ nghĩa hơn là khoá mang null.
+        Map<String, Object> userMetadata = new HashMap<>();
+        userMetadata.put("display_name", attempt.displayName());
+        userMetadata.put("role_intent", "candidate_free");
+        if (attempt.studentEmail() != null) {
+            userMetadata.put("student_email", attempt.studentEmail());
+        }
+
         UUID supabaseUserId = supabaseAdminService.createUser(
                 attempt.email(),
                 request.password(),
-                Map.of(
-                        "display_name", attempt.displayName(),
-                        "student_email", attempt.studentEmail(),
-                        "role_intent", "candidate_free"
-                )
+                userMetadata
         );
 
         // Update the registration attempt with the Supabase user ID
@@ -274,12 +284,12 @@ public class CandidateRegistrationService {
                         'role', :roleCode
                     )
                 )
-                """, Map.of(
-                "userId", userId,
-                "registrationId", attempt.id().toString(),
-                "studentEmail", attempt.studentEmail(),
-                "roleCode", RoleCode.candidate_free.name()
-        ));
+                """, new MapSqlParameterSource()
+                .addValue("userId", userId)
+                .addValue("registrationId", attempt.id().toString())
+                // MapSqlParameterSource nhận null, Map.of thì không.
+                .addValue("studentEmail", attempt.studentEmail())
+                .addValue("roleCode", RoleCode.candidate_free.name()));
 
         jdbcTemplate.update("""
                 update candidate_registration_attempts
@@ -407,6 +417,11 @@ public class CandidateRegistrationService {
 
     private String generateOtp() {
         return String.format("%06d", secureRandom.nextInt(1_000_000));
+    }
+
+    /// Chuỗi rỗng hoặc toàn khoảng trắng thành null.
+    private String blankToNull(String value) {
+        return (value == null || value.isBlank()) ? null : value;
     }
 
     private String normalizeEmail(String email) {

@@ -14,6 +14,15 @@ public record CandidateRegistrationOtpRequest(
         )
         String password,
         @NotBlank @Size(max = 160) String displayName,
-        @NotBlank @Email @Size(max = 320) String studentEmail
+        /// Email trường học — TUỲ CHỌN.
+        ///
+        /// Bỏ @NotBlank vì trường này không được xác minh ở bước đăng ký:
+        /// tài khoản luôn được tạo với student_email_verified = false dù
+        /// người dùng nhập gì. Bắt buộc một ô không đổi lấy điều gì chỉ làm
+        /// rụng người đăng ký mới.
+        ///
+        /// @Email vẫn giữ: null và chuỗi rỗng đều qua được, nhưng nhập bậy
+        /// thì vẫn bị chặn.
+        @Email @Size(max = 320) String studentEmail
 ) {
 }
