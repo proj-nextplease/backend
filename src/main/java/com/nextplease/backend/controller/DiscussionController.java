@@ -71,6 +71,11 @@ public class DiscussionController {
         return ApiResponse.success(discussionService.votePoll(id, UUID.fromString(body.get("optionId"))));
     }
 
+    @GetMapping("/posts/{id}")
+    public ApiResponse<Map<String, Object>> getPost(@PathVariable UUID id) {
+        return ApiResponse.success(discussionService.getPost(id));
+    }
+
     @GetMapping("/posts/{id}/comments")
     public ApiResponse<List<Map<String, Object>>> getComments(@PathVariable UUID id) {
         return ApiResponse.success(discussionService.getComments(id));

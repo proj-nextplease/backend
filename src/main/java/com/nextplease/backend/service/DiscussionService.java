@@ -143,6 +143,30 @@ public class DiscussionService {
      */
     // Không @Transactional: xem currentUserIdOrNull(). Chỉ toàn câu SELECT.
     public List<Map<String, Object>> getPosts(String topicSlug, String sort, int limit, int offset) {
+        return loadPosts(topicSlug, sort, limit, offset, null);
+    }
+
+    /**
+     * Một bài theo id, cùng hình dạng với phần tử trong feed.
+     *
+     * Cần cho việc mở bài từ THÔNG BÁO: thông báo mang link /discussions/{id},
+     * mà bài đó có thể nằm ngoài trang đầu của feed. Không có endpoint này thì
+     * app phải tải cả feed rồi dò, và vẫn trượt với bài cũ.
+     *
+     * Dùng lại nguyên truy vấn của feed thay vì viết truy vấn thứ hai: hai
+     * truy vấn trả "cùng một thứ" là hai chỗ để lệch nhau khi sửa.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> getPost(UUID postId) {
+        List<Map<String, Object>> found = loadPosts(null, null, 1, 0, postId);
+        if (found.isEmpty()) {
+            throw new ResourceNotFoundException("Không tìm thấy bài viết này.");
+        }
+        return found.getFirst();
+    }
+
+    private List<Map<String, Object>> loadPosts(String topicSlug, String sort,
+                                                int limit, int offset, UUID postId) {
         UUID userId = currentUserIdOrNull();
         String orderBy = "highlight".equalsIgnoreCase(sort)
                 ? " order by \"likesCount\" desc, p.created_at desc "
@@ -178,11 +202,13 @@ public class DiscussionService {
                 where p.deleted_at is null
                   and p.hidden_at is null
                   and (:topicSlug::text is null or t.slug = :topicSlug)
+                  and (:postId::uuid is null or p.id = :postId)
                 """ + orderBy + """
                 limit :limit offset :offset
                 """, new MapSqlParameterSource()
                 .addValue("userId", userId)
                 .addValue("topicSlug", topicSlug == null || topicSlug.isBlank() ? null : topicSlug.trim())
+                .addValue("postId", postId)
                 .addValue("limit", Math.min(Math.max(limit, 1), 50))
                 .addValue("offset", Math.max(offset, 0)));
 
