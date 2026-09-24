@@ -250,12 +250,14 @@ public class QuestService {
         recordQuestHistory(applicationId, "SUBMITTED");
         log.info("[QuestService] User {} applied to quest {} → qa {}", userId, questId, applicationId);
 
-        Object ownerId = quest.get("created_by");
-        if (ownerId instanceof UUID owner) {
-            notificationService.notify(owner, "NEW_APPLICATION",
+        // Báo cho cả tổ chức chứ không riêng người đăng — xem giải thích ở
+        // ApplicationService.apply.
+        if (quest.get("company_id") instanceof UUID companyId) {
+            notificationService.notifyCompanyMembers(companyId, userId, "NEW_APPLICATION",
                     "Có người tham gia Quest",
                     "Một ứng viên vừa đăng ký tham gia \"" + quest.get("title") + "\".",
-                    "/businesses/dashboard");
+                    "/businesses/dashboard/candidates?posting=" + questId
+                            + "&type=QUEST&app=" + applicationId);
         }
 
         return Map.of("applicationId", applicationId, "questId", questId, "status", "SUBMITTED");

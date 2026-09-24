@@ -133,13 +133,20 @@ public class ApplicationService {
         recordHistory(applicationId, "SUBMITTED");
         log.info("[ApplicationService] User {} applied to job {} → application {}", userId, jobId, applicationId);
 
-        // Notify the post owner that a new candidate applied.
-        Object ownerId = job.get("created_by");
-        if (ownerId instanceof UUID owner) {
-            notificationService.notify(owner, "NEW_APPLICATION",
+        // Báo cho CẢ TỔ CHỨC, không chỉ người đăng tin.
+        //
+        // Cả ba vai trò OWNER/MANAGER/MEMBER đều duyệt được ứng viên. Báo
+        // riêng cho created_by nghĩa là người đó nghỉ phép hay rời tổ chức
+        // thì đơn rơi vào im lặng, trong khi ứng viên vẫn ngồi chờ.
+        //
+        // Link dẫn thẳng tới đúng tin và đúng đơn, thay vì thả người nhận ở
+        // cửa bảng điều khiển rồi để họ tự đi tìm.
+        if (job.get("company_id") instanceof UUID companyId) {
+            notificationService.notifyCompanyMembers(companyId, userId, "NEW_APPLICATION",
                     "Có ứng viên mới",
                     "Một ứng viên vừa ứng tuyển vào \"" + job.get("title") + "\".",
-                    "/businesses/dashboard");
+                    "/businesses/dashboard/candidates?posting=" + jobId
+                            + "&type=JOB&app=" + applicationId);
         }
 
         return Map.of(
