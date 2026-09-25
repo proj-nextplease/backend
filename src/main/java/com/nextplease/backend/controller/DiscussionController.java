@@ -52,7 +52,8 @@ public class DiscussionController {
         return ApiResponse.success(discussionService.createPost(
                 (String) body.get("topic"),
                 (String) body.get("content"),
-                options instanceof List<?> list ? (List<String>) list : null));
+                options instanceof List<?> list ? (List<String>) list : null,
+                Boolean.TRUE.equals(body.get("isAnonymous"))));
     }
 
     @DeleteMapping("/posts/{id}")
@@ -82,7 +83,10 @@ public class DiscussionController {
     }
 
     @PostMapping("/posts/{id}/comments")
-    public ApiResponse<Map<String, Object>> addComment(@PathVariable UUID id, @RequestBody Map<String, String> body) {
-        return ApiResponse.success(discussionService.addComment(id, body.get("content")));
+    public ApiResponse<Map<String, Object>> addComment(@PathVariable UUID id, @RequestBody Map<String, Object> body) {
+        return ApiResponse.success(discussionService.addComment(
+                id,
+                (String) body.get("content"),
+                Boolean.TRUE.equals(body.get("isAnonymous"))));
     }
 }

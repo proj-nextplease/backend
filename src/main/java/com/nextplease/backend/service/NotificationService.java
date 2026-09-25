@@ -109,6 +109,45 @@ public class NotificationService {
     }
 
     /**
+     * Notify every ACTIVE member of a company.
+     *
+     * Vì sao không chỉ báo cho người đăng tin: một tổ chức có OWNER, MANAGER và
+     * MEMBER, và cả ba vai trò đều duyệt được ứng viên. Báo riêng cho
+     * {@code created_by} nghĩa là người đó nghỉ phép, đổi việc hay bị gỡ khỏi
+     * tổ chức thì đơn ứng tuyển rơi vào im lặng — trong khi ứng viên vẫn ngồi
+     * chờ phản hồi.
+     *
+     * {@code excludeUserId} để bỏ qua chính người vừa gây ra sự kiện, nếu có.
+     * Fail-soft như mọi đường thông báo khác.
+     */
+    public void notifyCompanyMembers(UUID companyId, UUID excludeUserId,
+                                     String type, String title, String body, String link) {
+        if (companyId == null) return;
+        try {
+            List<UUID> memberIds = jdbcTemplate.query("""
+                    select user_id from authority_nodes
+                    where company_id = :companyId
+                      and status = 'ACTIVE'
+                      and deleted_at is null
+                    """, new MapSqlParameterSource().addValue("companyId", companyId),
+                    (rs, i) -> (UUID) rs.getObject("user_id"));
+
+            if (memberIds.isEmpty()) {
+                log.warn("[NotificationService] Company {} has no active member to notify", companyId);
+                return;
+            }
+
+            for (UUID memberId : memberIds) {
+                if (memberId == null || memberId.equals(excludeUserId)) continue;
+                notify(memberId, type, title, body, link, false);
+            }
+        } catch (Exception e) {
+            log.warn("[NotificationService] Failed to notify members of company {}: {}",
+                    companyId, e.getMessage());
+        }
+    }
+
+    /**
      * Job Match Alert (premium feature #5): when a new job/quest is approved and goes
      * public, notify every subscriber whose RS meets the requirement and who has at
      * least one matching skill. Fail-soft — never breaks the approval transaction.

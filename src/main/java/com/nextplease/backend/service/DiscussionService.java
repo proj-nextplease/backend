@@ -100,7 +100,8 @@ public class DiscussionService {
                             where f.topic_id = t.id and f.user_id = :userId)) as "isFollowing"
                 from discussion_topics t
                 order by t.sort_order, t.name
-                """, new MapSqlParameterSource().addValue("userId", userId));
+                """, new MapSqlParameterSource()
+                .addValue("userId", userId));
     }
 
     /** Bật/tắt theo dõi một chủ đề. Trả về trạng thái sau khi đổi. */
@@ -180,14 +181,26 @@ public class DiscussionService {
                        t.id           as "topicId",
                        t.slug         as "topicSlug",
                        t.name         as "topicName",
-                       u.id           as "authorId",
-                       coalesce(nullif(btrim(u.display_name), ''), split_part(u.email, '@', 1)) as "authorName",
-                       pr.avatar_url  as "authorAvatarUrl",
-                       coalesce(pr.headline,
+                       -- Ẩn danh: che với NGƯỜI KHÁC, không che với chính tác giả
+                       -- (họ cần nhận ra bài của mình để sửa/xoá) và không che
+                       -- với hệ thống (author_user_id vẫn nguyên trong DB để
+                       -- kiểm duyệt xử lý được).
+                       case when p.is_anonymous and p.author_user_id <> :viewerId
+                            then null else u.id end as "authorId",
+                       case when p.is_anonymous and p.author_user_id <> :viewerId
+                            then 'Ẩn danh'
+                            else coalesce(nullif(btrim(u.display_name), ''),
+                                          split_part(u.email, '@', 1)) end as "authorName",
+                       case when p.is_anonymous and p.author_user_id <> :viewerId
+                            then null else pr.avatar_url end as "authorAvatarUrl",
+                       p.is_anonymous as "isAnonymous",
+                       case when p.is_anonymous and p.author_user_id <> :viewerId
+                            then 'Thành viên ẩn danh'
+                            else coalesce(pr.headline,
                                 (select c.name from companies c
                                   where c.owner_user_id = u.id and c.deleted_at is null
                                   order by c.created_at limit 1),
-                                'Thành viên NextPlease') as "authorRole",
+                                'Thành viên NextPlease') end as "authorRole",
                        (select count(*) from discussion_post_likes l where l.post_id = p.id) as "likesCount",
                        (select count(*) from discussion_comments cm
                          where cm.post_id = p.id and cm.deleted_at is null) as "commentsCount",
@@ -207,6 +220,7 @@ public class DiscussionService {
                 limit :limit offset :offset
                 """, new MapSqlParameterSource()
                 .addValue("userId", userId)
+                .addValue("viewerId", viewerId())
                 .addValue("topicSlug", topicSlug == null || topicSlug.isBlank() ? null : topicSlug.trim())
                 .addValue("postId", postId)
                 .addValue("limit", Math.min(Math.max(limit, 1), 50))
@@ -252,7 +266,9 @@ public class DiscussionService {
                     select post_id as "postId", option_id as "optionId"
                     from discussion_poll_votes
                     where user_id = :userId and post_id in (:postIds)
-                    """, new MapSqlParameterSource().addValue("userId", userId).addValue("postIds", postIds))
+                    """, new MapSqlParameterSource()
+                    .addValue("userId", userId)
+                    .addValue("postIds", postIds))
                     .forEach(r -> myVote.put((UUID) r.get("postId"), (UUID) r.get("optionId")));
         }
 
@@ -282,13 +298,20 @@ public class DiscussionService {
                 from (
                     select cm.id,
                            cm.post_id as "postId",
-                           coalesce(nullif(btrim(u.display_name), ''), split_part(u.email, '@', 1)) as author,
-                           pr.avatar_url as "authorAvatarUrl",
-                           coalesce(pr.headline,
+                           case when cm.is_anonymous and cm.author_user_id <> :viewerId
+                                then 'Ẩn danh'
+                                else coalesce(nullif(btrim(u.display_name), ''),
+                                              split_part(u.email, '@', 1)) end as author,
+                           case when cm.is_anonymous and cm.author_user_id <> :viewerId
+                                then null else pr.avatar_url end as "authorAvatarUrl",
+                           cm.is_anonymous as "isAnonymous",
+                           case when cm.is_anonymous and cm.author_user_id <> :viewerId
+                                then 'Thành viên ẩn danh'
+                                else coalesce(pr.headline,
                                 (select c.name from companies c
                                   where c.owner_user_id = u.id and c.deleted_at is null
                                   order by c.created_at limit 1),
-                                'Thành viên NextPlease') as role,
+                                'Thành viên NextPlease') end as role,
                            cm.content,
                            cm.created_at as "createdAt",
                            row_number() over (partition by cm.post_id order by cm.created_at desc) as rn
@@ -301,6 +324,7 @@ public class DiscussionService {
                 order by "createdAt"
                 """, new MapSqlParameterSource()
                 .addValue("postIds", postIds)
+                .addValue("viewerId", viewerId())
                 .addValue("preview", PREVIEW_COMMENTS));
 
         Map<UUID, List<Map<String, Object>>> byPost = new HashMap<>();
@@ -317,7 +341,8 @@ public class DiscussionService {
      * {@value #MAX_POLL_OPTIONS} lựa chọn không rỗng.
      */
     @Transactional
-    public Map<String, Object> createPost(String topicSlug, String content, List<String> pollOptions) {
+    public Map<String, Object> createPost(String topicSlug, String content, List<String> pollOptions,
+                                         boolean isAnonymous) {
         UUID userId = requireUserId();
 
         String body = content == null ? "" : content.trim();
@@ -340,14 +365,15 @@ public class DiscussionService {
         List<String> options = normalizePollOptions(pollOptions);
 
         UUID postId = jdbcTemplate.queryForObject("""
-                insert into discussion_posts (topic_id, author_user_id, content, content_flag)
-                values (:topicId, :userId, :content, :contentFlag)
+                insert into discussion_posts (topic_id, author_user_id, content, content_flag, is_anonymous)
+                values (:topicId, :userId, :content, :contentFlag, :isAnonymous)
                 returning id
                 """, new MapSqlParameterSource()
                 .addValue("topicId", topicId)
                 .addValue("userId", userId)
                 .addValue("content", body)
-                .addValue("contentFlag", moderationService.containsProfanity(body)), UUID.class);
+                .addValue("contentFlag", moderationService.containsProfanity(body))
+                .addValue("isAnonymous", isAnonymous), UUID.class);
 
         for (int i = 0; i < options.size(); i++) {
             jdbcTemplate.update("""
@@ -425,8 +451,39 @@ public class DiscussionService {
      *      cứu ở đây thì có; bọc lại để một bài bị xoá giữa chừng không làm
      *      hỏng cả giao dịch thêm bình luận.
      */
+    /**
+     * Id người xem, dùng cho các phép so "người xem có phải tác giả không".
+     *
+     * KHÔNG BAO GIỜ null. Khách chưa đăng nhập nhận uuid toàn số 0 — nó không
+     * thể trùng id thật của ai, nên khách luôn rơi vào nhánh "không phải tác
+     * giả" và thấy 'Ẩn danh', đúng như mong muốn.
+     *
+     * Vì sao không truyền thẳng null: driver không suy được kiểu uuid từ một
+     * null không khai báo, Postgres trả "could not determine data type" và cả
+     * endpoint 500 — chính lỗi đã làm khách không mở được bài thảo luận.
+     */
+    private UUID viewerId() {
+        UUID id = currentUserIdOrNull();
+        return id != null ? id : new UUID(0L, 0L);
+    }
+
     private void notifyPostAuthor(UUID postId, UUID actorId, String type,
                                   String title, java.util.function.Function<String, String> body) {
+        notifyPostAuthor(postId, actorId, type, title, body, false);
+    }
+
+    /**
+     * Báo cho tác giả bài viết.
+     *
+     * {@code actorAnonymous} là chốt chặn rò rỉ: nếu người vừa bình luận chọn
+     * ẩn danh mà thông báo vẫn ghi "Nguyễn Văn A vừa bình luận", thì ẩn danh
+     * chẳng còn nghĩa gì — chủ bài biết ngay là ai. Tên bị thay bằng "Một
+     * người", và đây là chỗ DUY NHẤT tên thật có thể lọt ra ngoài qua đường
+     * thông báo.
+     */
+    private void notifyPostAuthor(UUID postId, UUID actorId, String type,
+                                  String title, java.util.function.Function<String, String> body,
+                                  boolean actorAnonymous) {
         try {
             Map<String, Object> row = jdbcTemplate.queryForMap("""
                     select p.author_user_id as "authorId",
@@ -452,7 +509,9 @@ public class DiscussionService {
             }
 
             notificationService.notify(authorId, type, title,
-                    body.apply(String.valueOf(row.get("actorName"))),
+                    body.apply(actorAnonymous
+                            ? "Một người"
+                            : String.valueOf(row.get("actorName"))),
                     "/discussions/" + postId);
             log.info("[thông báo] đã tạo {} cho người dùng {} (bài {})",
                     type, authorId, postId);
@@ -540,13 +599,20 @@ public class DiscussionService {
         assertPostVisible(postId);
         return jdbcTemplate.queryForList("""
                 select cm.id,
-                       coalesce(nullif(btrim(u.display_name), ''), split_part(u.email, '@', 1)) as author,
-                       pr.avatar_url as "authorAvatarUrl",
-                       coalesce(pr.headline,
+                       case when cm.is_anonymous and cm.author_user_id <> :viewerId
+                            then 'Ẩn danh'
+                            else coalesce(nullif(btrim(u.display_name), ''),
+                                          split_part(u.email, '@', 1)) end as author,
+                       case when cm.is_anonymous and cm.author_user_id <> :viewerId
+                            then null else pr.avatar_url end as "authorAvatarUrl",
+                       cm.is_anonymous as "isAnonymous",
+                       case when cm.is_anonymous and cm.author_user_id <> :viewerId
+                            then 'Thành viên ẩn danh'
+                            else coalesce(pr.headline,
                                 (select c.name from companies c
                                   where c.owner_user_id = u.id and c.deleted_at is null
                                   order by c.created_at limit 1),
-                                'Thành viên NextPlease') as role,
+                                'Thành viên NextPlease') end as role,
                        cm.content,
                        cm.created_at as "createdAt"
                 from discussion_comments cm
@@ -554,11 +620,15 @@ public class DiscussionService {
                 left join profiles pr on pr.user_id = u.id
                 where cm.post_id = :postId and cm.deleted_at is null
                 order by cm.created_at
-                """, Map.of("postId", postId));
+                """, new MapSqlParameterSource()
+                // MapSqlParameterSource chứ không phải Map.of: khách chưa đăng
+                // nhập có userId null, và Map.of ném NPE với giá trị null.
+                .addValue("postId", postId)
+                .addValue("viewerId", viewerId()));
     }
 
     @Transactional
-    public Map<String, Object> addComment(UUID postId, String content) {
+    public Map<String, Object> addComment(UUID postId, String content, boolean isAnonymous) {
         UUID userId = requireUserId();
         assertPostVisible(postId);
 
@@ -571,34 +641,45 @@ public class DiscussionService {
         }
 
         UUID commentId = jdbcTemplate.queryForObject("""
-                insert into discussion_comments (post_id, author_user_id, content, content_flag)
-                values (:postId, :userId, :content, :contentFlag)
+                insert into discussion_comments (post_id, author_user_id, content, content_flag, is_anonymous)
+                values (:postId, :userId, :content, :contentFlag, :isAnonymous)
                 returning id
                 """, new MapSqlParameterSource()
                 .addValue("postId", postId)
                 .addValue("userId", userId)
                 .addValue("content", body)
-                .addValue("contentFlag", moderationService.containsProfanity(body)), UUID.class);
+                .addValue("contentFlag", moderationService.containsProfanity(body))
+                .addValue("isAnonymous", isAnonymous), UUID.class);
 
         notifyPostAuthor(postId, userId, "DISCUSSION_COMMENT",
                 "Có người bình luận bài của bạn",
-                actor -> actor + " vừa bình luận bài viết của bạn.");
+                actor -> actor + " vừa bình luận bài viết của bạn.",
+                isAnonymous);
 
         return jdbcTemplate.queryForMap("""
                 select cm.id,
-                       coalesce(nullif(btrim(u.display_name), ''), split_part(u.email, '@', 1)) as author,
-                       pr.avatar_url as "authorAvatarUrl",
-                       coalesce(pr.headline,
+                       case when cm.is_anonymous and cm.author_user_id <> :viewerId
+                            then 'Ẩn danh'
+                            else coalesce(nullif(btrim(u.display_name), ''),
+                                          split_part(u.email, '@', 1)) end as author,
+                       case when cm.is_anonymous and cm.author_user_id <> :viewerId
+                            then null else pr.avatar_url end as "authorAvatarUrl",
+                       cm.is_anonymous as "isAnonymous",
+                       case when cm.is_anonymous and cm.author_user_id <> :viewerId
+                            then 'Thành viên ẩn danh'
+                            else coalesce(pr.headline,
                                 (select c.name from companies c
                                   where c.owner_user_id = u.id and c.deleted_at is null
                                   order by c.created_at limit 1),
-                                'Thành viên NextPlease') as role,
+                                'Thành viên NextPlease') end as role,
                        cm.content,
                        cm.created_at as "createdAt"
                 from discussion_comments cm
                 join app_users u on u.id = cm.author_user_id
                 left join profiles pr on pr.user_id = u.id
                 where cm.id = :id
-                """, Map.of("id", commentId));
+                """, new MapSqlParameterSource()
+                .addValue("id", commentId)
+                .addValue("viewerId", viewerId()));
     }
 }
