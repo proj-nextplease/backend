@@ -262,7 +262,13 @@ public class JobService {
                        c.name as "companyName",
                        c.company_type as "companyType",
                        c.logo_url as "companyLogo",
-                       (select count(*) from applications a where a.job_id = j.id) as "applicantsCount"
+                       -- Loại đơn đã rút và bị từ chối, giống hệt cách QuestService đếm.
+                       -- Hai lý do: (1) con số phải nghĩa là "đang được cân nhắc",
+                       -- (2) từ V51 một người rút rồi nộp lại được, nên đếm tất sẽ
+                       -- phồng lên theo số lần họ đổi ý.
+                       (select count(*) from applications a
+                         where a.job_id = j.id
+                           and a.status not in ('WITHDRAWN', 'REJECTED')) as "applicantsCount"
                 from jobs j
                 join companies c on j.company_id = c.id
                 where j.status = 'OPEN'
@@ -391,6 +397,13 @@ public class JobService {
                            c.name as "companyName",
                            c.logo_url as "companyLogo",
                            c.company_type as "companyType",
+                           -- Thiếu trường này là lý do trang chi tiết luôn ghi
+                           -- "Hãy là ứng viên đầu tiên": danh sách trả về số thật,
+                           -- chi tiết không trả gì nên FE rơi về 0. Cùng một tin,
+                           -- hai trang nói hai chuyện khác nhau.
+                           (select count(*) from applications a
+                             where a.job_id = j.id
+                               and a.status not in ('WITHDRAWN', 'REJECTED')) as "applicantsCount",
                            'JOB' as "postType"
                     from jobs j
                     join companies c on j.company_id = c.id
@@ -423,6 +436,9 @@ public class JobService {
                                c.name as "companyName",
                                c.logo_url as "companyLogo",
                                c.company_type as "companyType",
+                               (select count(*) from quest_applications qa
+                                 where qa.quest_id = q.id
+                                   and qa.status not in ('WITHDRAWN', 'REJECTED')) as "applicantsCount",
                                'QUEST' as "postType"
                         from quests q
                         join companies c on q.company_id = c.id
