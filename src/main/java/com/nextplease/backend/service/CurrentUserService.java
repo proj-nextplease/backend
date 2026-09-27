@@ -55,7 +55,26 @@ public class CurrentUserService {
         return null;
     }
 
-    @Transactional
+    /**
+     * noRollbackFor = ResourceNotFoundException.class — KHÔNG phải chi tiết vụn vặt.
+     *
+     * Với khách chưa đăng nhập, resolveSupabaseUserId() ném ResourceNotFoundException.
+     * Phương thức này là @Transactional, nên khi nó được gọi từ BÊN TRONG một
+     * giao dịch khác, Spring nhập chung giao dịch đó và đánh dấu rollback-only
+     * trước khi ném. Nơi gọi bắt ngoại lệ rồi trả null (cố ý, để khách vẫn đọc
+     * được nội dung công khai) — nhưng dấu rollback-only vẫn còn. Đến lúc commit,
+     * Spring ném UnexpectedRollbackException và cả endpoint thành HTTP 500.
+     *
+     * Triệu chứng rất dễ chẩn đoán nhầm: endpoint KHÔNG transactional thì chạy
+     * tốt, endpoint @Transactional thì 500 — dù dùng chung một truy vấn. Và
+     * đường 404 vẫn đúng, vì khi đó giao dịch rollback chứ không commit nên
+     * không có chỗ nào để lộ lỗi. Đúng bộ triệu chứng của lỗi ở mục Thảo luận:
+     * GET /discussions/posts trả 200, còn /discussions/posts/{id} trả 500.
+     *
+     * "Không tìm thấy người dùng" không phải hỏng dữ liệu, nên không có gì để
+     * rollback. Khai như vậy là đúng ngữ nghĩa, không phải mẹo lách.
+     */
+    @Transactional(noRollbackFor = ResourceNotFoundException.class)
     public MeResponse getCurrentUser() {
         UUID supabaseUserId = resolveSupabaseUserId();
         AppUser appUser;
