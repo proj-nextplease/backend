@@ -80,27 +80,43 @@ public class ExternalJobService {
 
     public List<Map<String, Object>> list(String q, String location, int limit) {
         int capped = Math.max(1, Math.min(limit, 100));
+        /* DISTINCT ON de gop tin trung.
+         *
+         * Careerjet tong hop tu nhieu trang nguon, nen CUNG mot viec tra ve
+         * nhieu lan, moi lan mot link theo doi khac nhau. Khoa sha256(url) coi
+         * chung la cac tin rieng biet — do duoc 13 cap trung trong 50 tin, co
+         * tin lap 4 lan. Khong gop thi danh sach nhin nhu loi.
+         *
+         * Gop luc DOC chu khong luc ghi: giu nguyen moi ban trong DB thi sau
+         * nay doi tieu chi gop khong phai keo lai du lieu.
+         */
         return jdbcTemplate.queryForList("""
-                select id,
-                       title,
-                       company_name  as "companyName",
-                       location,
-                       excerpt,
-                       salary_text   as "salaryText",
-                       salary_type   as "salaryType",
-                       apply_url     as "applyUrl",
-                       posted_at     as "postedAt",
-                       source
-                from external_jobs
-                where is_active
-                  -- PHẢI ép kiểu ::text. Khi q/loc là null, driver gửi một NULL
-                  -- không khai kiểu; Postgres không suy được kiểu cho ilike và
-                  -- ném "could not determine data type", làm cả endpoint 503.
-                  -- Có ép kiểu ở lần xuất hiện đầu thì các lần sau suy theo.
-                  and (:q::text is null or title ilike '%' || :q || '%'
-                                        or company_name ilike '%' || :q || '%')
-                  and (:loc::text is null or location ilike '%' || :loc || '%')
-                order by posted_at desc nulls last, last_seen_at desc
+                select * from (
+                    select distinct on (lower(title), lower(coalesce(company_name, '')))
+                           id,
+                           title,
+                           company_name  as "companyName",
+                           location,
+                           excerpt,
+                           salary_text   as "salaryText",
+                           salary_min    as "salaryMin",
+                           salary_max    as "salaryMax",
+                           salary_type   as "salaryType",
+                           apply_url     as "applyUrl",
+                           posted_at     as "postedAt",
+                           last_seen_at  as "lastSeenAt",
+                           source
+                    from external_jobs
+                    where is_active
+                      and (:q::text is null or title ilike '%' || :q || '%'
+                                            or company_name ilike '%' || :q || '%')
+                      and (:loc::text is null or location ilike '%' || :loc || '%')
+                    -- DISTINCT ON giu HANG DAU TIEN cua moi nhom, nen thu tu o
+                    -- day quyet dinh ban nao duoc giu: ban moi nhat.
+                    order by lower(title), lower(coalesce(company_name, '')),
+                             posted_at desc nulls last, last_seen_at desc
+                ) t
+                order by "postedAt" desc nulls last, "lastSeenAt" desc
                 limit :limit
                 """, new MapSqlParameterSource()
                 .addValue("q", blankToNull(q))
