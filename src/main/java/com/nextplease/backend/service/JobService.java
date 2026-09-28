@@ -406,6 +406,7 @@ public class JobService {
                            c.name as "companyName",
                            c.logo_url as "companyLogo",
                            c.company_type as "companyType",
+                           coalesce(j.requires_premium, false) as "requiresPremium",
                            -- Thiếu trường này là lý do trang chi tiết luôn ghi
                            -- "Hãy là ứng viên đầu tiên": danh sách trả về số thật,
                            -- chi tiết không trả gì nên FE rơi về 0. Cùng một tin,
@@ -445,6 +446,7 @@ public class JobService {
                                c.name as "companyName",
                                c.logo_url as "companyLogo",
                                c.company_type as "companyType",
+                               coalesce(q.requires_premium, false) as "requiresPremium",
                                (select count(*) from quest_applications qa
                                  where qa.quest_id = q.id
                                    and qa.status not in ('WITHDRAWN', 'REJECTED')) as "applicantsCount",
