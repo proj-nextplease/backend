@@ -142,6 +142,7 @@ public class QuestService {
                     q.exp_reward   as "expReward",
                     q.np_reward    as "npReward",
                     q.min_req_rs   as "minReqRs",
+                    q.requires_premium as "requiresPremium",
                     q.capacity,
                     q.starts_at    as "startsAt",
                     q.ends_at      as "endsAt",
@@ -224,6 +225,22 @@ public class QuestService {
             throw new AppException(HttpStatus.FORBIDDEN,
                     String.format("Điểm RS của bạn chưa đủ. Cần %d RS, bạn có %d RS.", minRs, myRs),
                     "RS_TOO_LOW");
+        }
+
+        // 3c. Cổng Premium — đặt SAU cổng RS, giống thứ tự bên jobs
+        //      (ApplicationService: OPEN -> RS -> Premium -> trùng đơn).
+        //      Thứ tự quan trọng: người thiếu RS cần nghe "chưa đủ RS" chứ
+        //      không phải "hãy mua Premium" — lời mời mua sai lúc còn tệ hơn
+        //      không mời.
+        if (Boolean.TRUE.equals(quest.get("requires_premium"))) {
+            Integer premiumCount = jdbcTemplate.queryForObject(
+                    "select count(*) from app_users where id = :userId and premium_until > now()",
+                    Map.of("userId", userId), Integer.class);
+            if (premiumCount == null || premiumCount == 0) {
+                throw new AppException(HttpStatus.PAYMENT_REQUIRED,
+                        "Quest này yêu cầu Premium Pass. Nâng cấp để nộp đơn.",
+                        "PREMIUM_REQUIRED");
+            }
         }
 
         // 3b. Validate + snapshot custom answers
@@ -350,14 +367,17 @@ public class QuestService {
         UUID questId = jdbcTemplate.queryForObject("""
                 insert into quests
                     (company_id, created_by, title, description, category, location, exp_reward, np_reward,
-                     min_req_rs, capacity, starts_at, ends_at, banner_url, banner_pos, status, content_flag)
+                     min_req_rs, capacity, starts_at, ends_at, banner_url, banner_pos,
+                     requires_premium, status, content_flag)
                 values
                     (:companyId, :createdBy, :title, :description, :category, :location, :expReward, :npReward,
-                     :minReqRs, :capacity, :startsAt::timestamptz, :endsAt::timestamptz, :bannerUrl, :bannerPos, 'PENDING', :contentFlag)
+                     :minReqRs, :capacity, :startsAt::timestamptz, :endsAt::timestamptz, :bannerUrl, :bannerPos,
+                     :requiresPremium, 'PENDING', :contentFlag)
                 returning id
                 """, new MapSqlParameterSource()
                 .addValue("contentFlag", moderationService.containsProfanity(
                         String.valueOf(request.get("title")) + " " + String.valueOf(request.get("description"))))
+                .addValue("requiresPremium", Boolean.TRUE.equals(request.get("requiresPremium")))
                 .addValue("companyId", companyId)
                 .addValue("createdBy", organizerUserId)
                 .addValue("title", request.get("title"))
@@ -400,6 +420,7 @@ public class QuestService {
                     q.exp_reward  as "expReward",
                     q.np_reward   as "npReward",
                     q.min_req_rs  as "minReqRs",
+                    q.requires_premium as "requiresPremium",
                     q.capacity,
                     q.starts_at   as "startsAt",
                     q.ends_at     as "endsAt",
@@ -431,6 +452,9 @@ public class QuestService {
                     u.id            as "candidateId",
                     u.display_name  as "candidateName",
                     u.email         as "candidateEmail",
+                    -- Xem chú thích ở ApplicationService.getJobApplications:
+                    -- huy hiệu chỉ để nhận diện, KHÔNG đổi thứ tự sắp xếp.
+                    (u.premium_until > now()) as "isPremium",
                     p.reputation_score,
                     p.current_level,
                     p.total_exp,
@@ -574,7 +598,8 @@ public class QuestService {
     private Map<String, Object> fetchQuestOrThrow(UUID questId) {
         try {
             return jdbcTemplate.queryForMap("""
-                    select id, title, status, category, min_req_rs, capacity, exp_reward, np_reward, company_id, ends_at, created_by
+                    select id, title, status, category, min_req_rs, capacity, exp_reward, np_reward,
+                           company_id, ends_at, created_by, requires_premium
                     from quests where id = :id and deleted_at is null
                     """, Map.of("id", questId));
         } catch (org.springframework.dao.EmptyResultDataAccessException e) {
@@ -618,6 +643,7 @@ public class QuestService {
             Map<String, Object> quest = jdbcTemplate.queryForMap("""
                     select id, title, description, category, location, status, exp_reward as "expReward",
                            min_req_rs as "minReqRs", capacity, ends_at as "endsAt",
+                           requires_premium as "requiresPremium",
                            banner_url as "bannerUrl", banner_pos as "bannerPos", rejection_reason as "rejectionReason"
                     from quests
                     where id = :questId and deleted_at is null
@@ -649,6 +675,11 @@ public class QuestService {
                     ends_at     = coalesce(cast(:endsAt as timestamptz), ends_at),
                     banner_url  = :bannerUrl,
                     banner_pos  = :bannerPos,
+                    -- coalesce chứ không gán thẳng: câu update này nhận Map
+                    -- thưa, client có thể chỉ gửi vài trường. Gán thẳng thì
+                    -- một lần sửa tiêu đề sẽ âm thầm tắt chế độ Premium —
+                    -- đúng lỗi vừa gặp bên jobs.
+                    requires_premium = coalesce(:requiresPremium, requires_premium),
                     status      = 'PENDING',
                     updated_at  = now()
                 where id = :questId
@@ -663,6 +694,8 @@ public class QuestService {
                 .addValue("endsAt",      request.get("endsAt"))
                 .addValue("bannerUrl",   request.get("bannerUrl"))
                 .addValue("bannerPos",   request.get("bannerPos"))
+                .addValue("requiresPremium", request.containsKey("requiresPremium")
+                        ? Boolean.TRUE.equals(request.get("requiresPremium")) : null)
                 .addValue("questId",     questId));
 
         if (request.containsKey("formFields")) {

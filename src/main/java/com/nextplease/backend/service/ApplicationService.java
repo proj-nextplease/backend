@@ -187,6 +187,13 @@ public class ApplicationService {
                     u.id            as candidate_id,
                     u.display_name  as candidate_name,
                     u.email         as candidate_email,
+                    -- Huy hiệu Premium cho nhà tuyển dụng thấy. CỐ Ý không đưa
+                    -- vào order by: thứ tự đã do boosted_until quyết định, và
+                    -- đó là dịch vụ riêng người dùng chủ động mua cho TỪNG đơn.
+                    -- Để Premium đổi thứ tự nữa thì thành hai lớp trả tiền
+                    -- chồng lên nhau, và một hồ sơ Proof tốt bị đẩy xuống dưới
+                    -- chỉ vì người kia trả tiền theo tháng.
+                    (u.premium_until > now()) as "isPremium",
                     p.reputation_score,
                     p.total_exp,
                     p.current_level,

@@ -31,6 +31,8 @@ public record PublicPortfolioResponse(
         String selectedTheme,
         boolean themeUnlocked,
         boolean openToWork,
-        Map<String, Object> socialLinks
+        Map<String, Object> socialLinks,
+        /** Huy hiệu Premium trên link hồ sơ ứng viên gửi cho nhà tuyển dụng. */
+        boolean isPremium
 ) {
 }

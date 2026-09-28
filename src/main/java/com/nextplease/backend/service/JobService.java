@@ -88,12 +88,14 @@ public class JobService {
                 insert into jobs (
                     id, company_id, title, description, job_type, category, specialty,
                     compensation, min_req_rs, location, is_remote, capacity,
-                    deadline_at, banner_url, banner_pos, status, created_by, content_flag, created_at, updated_at
+                    deadline_at, banner_url, banner_pos, requires_premium,
+                    status, created_by, content_flag, created_at, updated_at
                 )
                 values (
                     :id, :companyId, :title, :description, :jobType, :category, :specialty,
                     :compensation, :minReqRs, :location, :isRemote, :capacity,
-                    :deadlineAt, :bannerUrl, :bannerPos, 'PENDING', :userId, :contentFlag, now(), now()
+                    :deadlineAt, :bannerUrl, :bannerPos, :requiresPremium,
+                    'PENDING', :userId, :contentFlag, now(), now()
                 )
 
                 """, new MapSqlParameterSource()
@@ -113,6 +115,7 @@ public class JobService {
                 .addValue("isRemote", request.isRemote() != null ? request.isRemote() : false)
                 .addValue("capacity", request.capacity())
                 .addValue("deadlineAt", request.deadlineAt())
+                .addValue("requiresPremium", request.requiresPremium() != null && request.requiresPremium())
                 .addValue("userId", userId)
         );
 
@@ -185,6 +188,10 @@ public class JobService {
                     deadline_at = :deadlineAt,
                     banner_url = :bannerUrl,
                     banner_pos = :bannerPos,
+                    -- Phải có ở cả INSERT lẫn UPDATE. Thiếu ở đây thì người
+                    -- đăng bật/tắt ô "Chỉ nhận ứng viên Premium" lúc sửa tin sẽ
+                    -- không có tác dụng gì, mà giao diện vẫn báo lưu thành công.
+                    requires_premium = :requiresPremium,
                     status = :status,
                     updated_at = now()
                 where id = :jobId
@@ -192,6 +199,7 @@ public class JobService {
                 .addValue("bannerUrl", request.bannerUrl())
                 .addValue("bannerPos", request.bannerPos())
                 .addValue("status", newStatus)
+                .addValue("requiresPremium", request.requiresPremium() != null && request.requiresPremium())
                 .addValue("jobId", jobId)
                 .addValue("title", request.title().trim())
                 .addValue("description", request.description().trim())
@@ -341,6 +349,7 @@ public class JobService {
                        rejection_reason as "rejectionReason",
                        deadline_at as "deadlineAt",
                        created_at as "createdAt",
+                       requires_premium as "requiresPremium",
                        (select count(*) from applications where job_id = jobs.id) as "applicantsCount"
                 from jobs
                 where company_id = :companyId
@@ -499,6 +508,12 @@ public class JobService {
                     select id, title, description, job_type as "jobType", category, specialty,
                            compensation, min_req_rs as "minReqRs", location, is_remote as "isRemote",
                            capacity, deadline_at as "deadlineAt", banner_url as "bannerUrl", banner_pos as "bannerPos",
+                           -- Thiếu cột này thì form sửa tin mở ra luôn thấy ô
+                           -- "Chỉ nhận ứng viên Premium" BỎ TRỐNG, dù tin đang
+                           -- bật. Người đăng sửa một thứ khác rồi lưu là vô
+                           -- tình tắt luôn chế độ Premium mà không hay biết —
+                           -- mất dữ liệu im lặng, không có cảnh báo nào.
+                           requires_premium as "requiresPremium",
                            status, rejection_reason as "rejectionReason"
                     from jobs
                     where id = :jobId and company_id = :companyId
