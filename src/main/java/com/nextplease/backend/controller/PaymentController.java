@@ -51,12 +51,12 @@ public class PaymentController {
         /* Mô tả hiện trên app ngân hàng của người trả. PayOS giới hạn 25 ký tự;
            dài hơn là bị từ chối tạo link. */
         String description = "NextPlease " + orderCode % 1_000_000L;
-        String checkoutUrl = payOsService.createPaymentLink(orderCode, amountVnd, description);
+        Map<String, Object> payment = payOsService.createPaymentLink(orderCode, amountVnd, description);
 
-        return ApiResponse.success(Map.of(
-                "orderCode", orderCode,
-                "checkoutUrl", checkoutUrl,
-                "amountVnd", amountVnd));
+        Map<String, Object> out = new java.util.LinkedHashMap<>(payment);
+        out.put("orderCode", orderCode);
+        out.put("amountVnd", amountVnd);
+        return ApiResponse.success(out);
     }
 
     /**
@@ -101,6 +101,28 @@ public class PaymentController {
             log.info("[PayOS] orderCode {} không cộng tiền lần này", orderCode);
         }
         return Map.of("success", true);
+    }
+
+    /**
+     * Người dùng bấm huỷ trên màn thanh toán của mình.
+     *
+     * Chỉ đánh dấu đơn ở phía mình, KHÔNG gọi PayOS huỷ. Nếu tiền đã chuyển
+     * xong trước khi họ bấm huỷ thì webhook vẫn phải cộng được — vì vậy điều
+     * kiện `status = 'PENDING'` là bắt buộc: đơn đã PAID thì lệnh này không
+     * đụng tới.
+     */
+    @PostMapping("/payos/cancel")
+    public ApiResponse<Map<String, Object>> cancel(@RequestBody Map<String, Object> body) {
+        UUID userId = currentUserService.getCurrentUser().appUserId();
+        long orderCode;
+        try {
+            Object raw = body.get("orderCode");
+            orderCode = raw instanceof Number n ? n.longValue() : Long.parseLong(String.valueOf(raw).trim());
+        } catch (Exception e) {
+            throw new AppException(HttpStatus.BAD_REQUEST, "orderCode không hợp lệ.");
+        }
+        boolean cancelled = walletService.cancelTopUpRequest(userId, orderCode);
+        return ApiResponse.success(Map.of("cancelled", cancelled));
     }
 
     /** Cho frontend hỏi trạng thái sau khi người dùng quay lại từ PayOS. */

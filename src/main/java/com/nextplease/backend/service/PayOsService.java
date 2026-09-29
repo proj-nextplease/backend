@@ -60,11 +60,16 @@ public class PayOsService {
     }
 
     /**
-     * Tạo link thanh toán, trả về checkoutUrl.
+     * Tạo link thanh toán.
+     *
+     * Trả về cả thông tin chuyển khoản (qrCode, số tài khoản, nội dung) chứ
+     * không chỉ checkoutUrl: webapp tự dựng màn thanh toán trong giao diện của
+     * mình. Trang checkout của PayOS không sửa được giao diện, và đẩy người
+     * dùng rời khỏi site làm nút "Huỷ" của họ điều hướng theo ý họ.
      *
      * @param orderCode mã đơn dạng số, phải là duy nhất và đã lưu sẵn ở DB
      */
-    public String createPaymentLink(long orderCode, int amountVnd, String description) {
+    public Map<String, Object> createPaymentLink(long orderCode, int amountVnd, String description) {
         requireConfigured();
 
         /* Chữ ký của PayOS tính trên ĐÚNG năm trường, theo ĐÚNG thứ tự chữ cái
@@ -110,11 +115,23 @@ public class PayOsService {
                         "PayOS từ chối tạo link (mã " + code + "): "
                                 + root.path("desc").asText("không rõ lý do"));
             }
-            String checkoutUrl = root.path("data").path("checkoutUrl").asText("");
+            JsonNode data = root.path("data");
+            String checkoutUrl = data.path("checkoutUrl").asText("");
             if (checkoutUrl.isBlank()) {
                 throw new AppException(HttpStatus.BAD_GATEWAY, "PayOS không trả về checkoutUrl.");
             }
-            return checkoutUrl;
+
+            /* qrCode là chuỗi VietQR thô, không phải ảnh — webapp tự vẽ thành
+               mã QR. Nếu PayOS không trả trường này thì vẫn còn checkoutUrl để
+               lùi về, nên không ném lỗi ở đây. */
+            Map<String, Object> out = new java.util.LinkedHashMap<>();
+            out.put("checkoutUrl", checkoutUrl);
+            out.put("qrCode", data.path("qrCode").asText(""));
+            out.put("accountNumber", data.path("accountNumber").asText(""));
+            out.put("accountName", data.path("accountName").asText(""));
+            out.put("bin", data.path("bin").asText(""));
+            out.put("description", data.path("description").asText(description));
+            return out;
         } catch (AppException e) {
             throw e;
         } catch (InterruptedException e) {
