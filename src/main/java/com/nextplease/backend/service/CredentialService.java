@@ -230,7 +230,7 @@ public class CredentialService {
         boolean wasExpress = expressRaw instanceof Boolean b && b;
         if (!wasExpress) return false;
 
-        int price = configService.getInt("express_verification_price_np", 25000);
+        int price = configService.getInt("express_verification_price_np", 15000);
         UUID profileId = (UUID) exp.get("profile_id");
         UUID ownerUserId = profileOwnerUserId(profileId);
         if (ownerUserId == null) return false;

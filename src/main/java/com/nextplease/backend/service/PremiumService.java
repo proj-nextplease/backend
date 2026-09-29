@@ -35,10 +35,10 @@ public class PremiumService {
     /** Returns current prices and durations of all premium features */
     public Map<String, Object> getPremiumConfig() {
         return Map.of(
-            "boostPriceNp", configService.getInt("premium_boost_price_np", 15000),
+            "boostPriceNp", configService.getInt("premium_boost_price_np", 25000),
             "boostDurationHours", configService.getInt("premium_boost_duration_hours", 48),
             "insightPriceNp", configService.getInt("application_insight_price_np", 10000),
-            "expressPriceNp", configService.getInt("express_verification_price_np", 25000),
+            "expressPriceNp", configService.getInt("express_verification_price_np", 15000),
             "themePriceNp", configService.getInt("profile_theme_price_np", 50000),
             "matchAlertPriceNp", configService.getInt("job_match_alert_price_np", 19000),
             "earlyAccessHours", configService.getInt("job_match_early_access_hours", 12)
@@ -85,7 +85,7 @@ public class PremiumService {
 
         Map<String, Object> wallet = lockWalletOrThrow(userId);
         int balance = ((Number) wallet.get("np_balance")).intValue();
-        int price = configService.getInt("premium_boost_price_np", 15000);
+        int price = configService.getInt("premium_boost_price_np", 25000);
 
         if (balance < price) {
             throw new AppException(HttpStatus.PAYMENT_REQUIRED,
@@ -310,7 +310,7 @@ public class PremiumService {
         // 2. Lock wallet
         Map<String, Object> wallet = lockWalletOrThrow(userId);
         int balance = ((Number) wallet.get("np_balance")).intValue();
-        int price = configService.getInt("express_verification_price_np", 25000);
+        int price = configService.getInt("express_verification_price_np", 15000);
 
         if (balance < price) {
             throw new AppException(HttpStatus.PAYMENT_REQUIRED,
