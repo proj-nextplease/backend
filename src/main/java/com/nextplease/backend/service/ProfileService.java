@@ -592,6 +592,19 @@ public class ProfileService {
         boolean openToWork = profile.get("open_to_work") != null && (Boolean) profile.get("open_to_work");
         Map<String, Object> socialLinks = parseJsonMap(getJsonString(profile.get("social_links")));
 
+        /* Premium nằm ở app_users chứ không phải profiles, nên phải truy vấn
+           riêng. Hỏng thì coi như không có Premium: một huy hiệu thiếu còn hơn
+           cả trang hồ sơ công khai chết vì một truy vấn phụ. */
+        boolean isPremium = false;
+        try {
+            Boolean p = jdbcTemplate.queryForObject(
+                    "select premium_until > now() from app_users where id = :userId",
+                    Map.of("userId", userId), Boolean.class);
+            isPremium = Boolean.TRUE.equals(p);
+        } catch (Exception e) {
+            log.warn("Không đọc được premium_until của {}: {}", userId, e.getMessage());
+        }
+
         return new PublicPortfolioResponse(
                 displayName, headline, schoolName, location, bio,
                 skills, avatarConfig,
@@ -601,7 +614,7 @@ public class ProfileService {
                 experiences, credentials,
                 reputationScore, totalExp, currentLevel,
                 selectedTheme, themeUnlocked,
-                openToWork, socialLinks
+                openToWork, socialLinks, isPremium
         );
     }
 

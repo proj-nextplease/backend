@@ -26,6 +26,15 @@ public record JobCreateRequest(
         OffsetDateTime deadlineAt,
         String bannerUrl,
         String bannerPos,
+        /**
+         * Chỉ ứng viên có Premium Pass còn hiệu lực mới nộp được.
+         *
+         * Cổng chặn đã có sẵn trong ApplicationService từ lâu và cột
+         * jobs.requires_premium cũng có trong DB — nhưng trước đây KHÔNG có
+         * đường nào ghi giá trị true, nên tính năng chết từ đầu tới cuối.
+         * Trường này là mắt xích còn thiếu.
+         */
+        Boolean requiresPremium,
         @Valid List<SkillRequirement> skills,
         @Valid List<FormField> formFields
 ) {
