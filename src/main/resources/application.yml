@@ -65,6 +65,18 @@ server:
 app:
   # Khoá API Careerjet (bản v4). Không có khoá thì endpoint đồng bộ trả 503 và
   # nói rõ lý do, phần đọc vẫn chạy bình thường từ dữ liệu đã có trong DB.
+  # PayOS — cổng thanh toán thật. Thiếu khoá thì endpoint tạo link trả 503 và
+  # nói rõ lý do; webhook vẫn nhận nhưng từ chối mọi gói tin vì không kiểm
+  # được chữ ký, tức KHÔNG có đường nào cộng tiền khi chưa cấu hình.
+  wallet:
+    # Nạp tiền GIẢ. Mặc định TẮT — trên production bật cái này là mở một
+    # đường in tiền cho bất kỳ ai đăng nhập. Chỉ bật ở máy dev, hoặc tạm thời
+    # cho app mobile tới khi nó nối xong PayOS.
+    mock-topup-enabled: ${APP_MOCK_TOPUP_ENABLED:false}
+  payos:
+    client-id: ${PAYOS_CLIENT_ID:}
+    api-key: ${PAYOS_API_KEY:}
+    checksum-key: ${PAYOS_CHECKSUM_KEY:}
   careerjet:
     api-key: ${CAREERJET_API_KEY:}
   frontend:

@@ -28,7 +28,13 @@ public class WalletService {
     private final NamedParameterJdbcTemplate jdbcTemplate;
     private final ConfigService configService;
 
-    public WalletService(NamedParameterJdbcTemplate jdbcTemplate, ConfigService configService) {
+    /** Mặc định TẮT: an toàn phải là mặc định, bật mới cần khai báo. */
+    private final boolean mockTopUpEnabled;
+
+    public WalletService(NamedParameterJdbcTemplate jdbcTemplate, ConfigService configService,
+                         @org.springframework.beans.factory.annotation.Value(
+                                 "${app.wallet.mock-topup-enabled:false}") boolean mockTopUpEnabled) {
+        this.mockTopUpEnabled = mockTopUpEnabled;
         this.jdbcTemplate = jdbcTemplate;
         this.configService = configService;
     }
@@ -92,7 +98,19 @@ public class WalletService {
      * When real PayOS is integrated, replace with async webhook flow.
      */
     @Transactional
+    /**
+     * Nạp tiền GIẢ — cộng NP ngay, không qua thanh toán nào.
+     *
+     * Đây là một endpoint in tiền. Từ khi có PayOS, nó chỉ được phép sống ở
+     * máy dev và ở app mobile chưa nối PayOS. Trên production phải để
+     * APP_MOCK_TOPUP_ENABLED=false (mặc định), nếu không bất kỳ ai đăng nhập
+     * cũng tự cộng 10 triệu NP cho mình.
+     */
     public Map<String, Object> topUp(UUID userId, int amountVnd) {
+        if (!mockTopUpEnabled) {
+            throw new AppException(HttpStatus.GONE,
+                    "Nạp tiền thử đã tắt. Dùng luồng thanh toán PayOS.");
+        }
         int minTopup = minTopupVnd();
         if (amountVnd < minTopup) {
             throw new AppException(HttpStatus.BAD_REQUEST,
@@ -150,6 +168,156 @@ public class WalletService {
                 "balanceAfter", balanceAfter,
                 "paymentId", paymentId
         );
+    }
+
+
+    /* ─────────────────────── Nạp tiền thật qua PayOS ─────────────────────── */
+
+    /**
+     * Tạo một yêu cầu nạp tiền ở trạng thái PENDING.
+     *
+     * KHÔNG cộng NP ở đây. Tiền chỉ được cộng khi webhook của PayOS về và chữ
+     * ký hợp lệ — xem {@link #creditFromPayOs}. Người dùng quay lại returnUrl
+     * KHÔNG phải bằng chứng đã trả: đó là URL trong trình duyệt của họ, gõ tay
+     * được trong hai giây.
+     *
+     * @return orderCode để gọi sang PayOS
+     */
+    @Transactional
+    public long createTopUpRequest(UUID userId, int amountVnd) {
+        validateTopUpAmount(amountVnd);
+
+        /* orderCode phải là số, duy nhất toàn hệ thống, và KHÔNG đoán được
+           thứ tự để người ngoài không dò được đơn của người khác. Mốc thời
+           gian mili-giây cho tính duy nhất và tăng dần; ba chữ số ngẫu nhiên
+           cuối tránh đụng khi hai người bấm trong cùng một mili-giây. */
+        long orderCode = System.currentTimeMillis() * 1000
+                + java.util.concurrent.ThreadLocalRandom.current().nextInt(1000);
+
+        String transferContent = "NP" + userId.toString().replace("-", "").substring(0, 8).toUpperCase();
+
+        jdbcTemplate.update("""
+                insert into payment_requests
+                    (user_id, amount_vnd, amount_np, transfer_content, provider, status,
+                     order_code, expires_at)
+                values
+                    (:userId, :amountVnd, :amountVnd, :content, 'PAYOS', 'PENDING',
+                     :orderCode, now() + interval '15 minutes')
+                """, new MapSqlParameterSource()
+                .addValue("userId", userId)
+                .addValue("amountVnd", amountVnd)
+                .addValue("content", transferContent)
+                .addValue("orderCode", orderCode));
+
+        return orderCode;
+    }
+
+    /**
+     * Cộng NP sau khi PayOS xác nhận đã thu tiền.
+     *
+     * CHỈ gọi từ webhook, và CHỈ sau khi PayOsService đã xác minh chữ ký.
+     *
+     * Chống cộng trùng bằng chính câu UPDATE có điều kiện: PayOS gửi lại
+     * webhook khi không nhận được HTTP 200, nên cùng một lần trả tiền có thể
+     * tới nhiều lần. `where status = 'PENDING'` khiến lần thứ hai cập nhật 0
+     * dòng, và mình dừng ngay. Kiểm bằng `select` trước rồi mới `update` sẽ
+     * KHÔNG an toàn — hai webhook chạy song song đều đọc thấy PENDING.
+     *
+     * @return true nếu lần này thật sự cộng tiền
+     */
+    @Transactional
+    public boolean creditFromPayOs(long orderCode, int paidAmountVnd) {
+        Map<String, Object> req;
+        try {
+            req = jdbcTemplate.queryForMap("""
+                    select id, user_id, amount_vnd, status
+                    from payment_requests
+                    where order_code = :orderCode and provider = 'PAYOS'
+                    """, Map.of("orderCode", orderCode));
+        } catch (org.springframework.dao.EmptyResultDataAccessException e) {
+            log.warn("[PayOS] Webhook cho orderCode {} không khớp đơn nào", orderCode);
+            return false;
+        }
+
+        int expected = ((Number) req.get("amount_vnd")).intValue();
+        /* Đối chiếu với số ĐÃ LƯU, không tin số trong webhook. Chữ ký chỉ
+           chứng minh gói tin đến từ PayOS, không chứng minh nó khớp đơn của
+           mình — một gói tin hợp lệ của đơn 10.000đ không được phép cộng cho
+           đơn 500.000đ. */
+        if (paidAmountVnd != expected) {
+            log.warn("[PayOS] orderCode {} lệch tiền: webhook {} đ, đơn {} đ",
+                    orderCode, paidAmountVnd, expected);
+            return false;
+        }
+
+        int updated = jdbcTemplate.update("""
+                update payment_requests
+                set status = 'PAID', paid_at = now(), updated_at = now()
+                where order_code = :orderCode and status = 'PENDING'
+                """, Map.of("orderCode", orderCode));
+        if (updated != 1) {
+            log.info("[PayOS] orderCode {} đã xử lý trước đó, bỏ qua", orderCode);
+            return false;
+        }
+
+        UUID userId = (UUID) req.get("user_id");
+        UUID paymentId = (UUID) req.get("id");
+
+        Map<String, Object> wallet = lockWalletOrThrow(userId);
+        int balanceAfter = ((Number) wallet.get("np_balance")).intValue() + expected;
+
+        jdbcTemplate.update("""
+                update wallets set np_balance = :balance, updated_at = now()
+                where id = :walletId
+                """, Map.of("walletId", wallet.get("id"), "balance", balanceAfter));
+
+        jdbcTemplate.update("""
+                insert into wallet_transactions
+                    (wallet_id, amount_np, balance_after_np, transaction_type, reason,
+                     source_type, source_id, idempotency_key)
+                values
+                    (:walletId, :amount, :balanceAfter, 'TOPUP', :reason,
+                     'payment_request', :paymentId, :ikey)
+                """, new MapSqlParameterSource()
+                .addValue("walletId", wallet.get("id"))
+                .addValue("amount", expected)
+                .addValue("balanceAfter", balanceAfter)
+                .addValue("reason", String.format("Nạp %,d NP qua PayOS", expected))
+                .addValue("paymentId", paymentId)
+                .addValue("ikey", "payos_" + orderCode));
+
+        log.info("[PayOS] Cộng {} NP cho user {} → số dư {}", expected, userId, balanceAfter);
+        return true;
+    }
+
+    /**
+     * Trang thai mot don nap, cho frontend hoi sau khi nguoi dung quay lai.
+     *
+     * Loc theo user_id chu khong chi order_code: khong co dieu kien do thi bat
+     * ky ai doan duoc order_code cung xem duoc don nap cua nguoi khac.
+     */
+    public Map<String, Object> getTopUpStatus(UUID userId, long orderCode) {
+        try {
+            return jdbcTemplate.queryForMap("""
+                    select status, amount_vnd as "amountVnd", paid_at as "paidAt"
+                    from payment_requests
+                    where order_code = :orderCode and user_id = :userId
+                    """, Map.of("orderCode", orderCode, "userId", userId));
+        } catch (org.springframework.dao.EmptyResultDataAccessException e) {
+            throw new AppException(HttpStatus.NOT_FOUND, "Khong tim thay yeu cau nap tien nay.");
+        }
+    }
+
+    private void validateTopUpAmount(int amountVnd) {
+        int minTopup = minTopupVnd();
+        if (amountVnd < minTopup) {
+            throw new AppException(HttpStatus.BAD_REQUEST,
+                    String.format("Số tiền nạp tối thiểu là %,d VND.", minTopup));
+        }
+        if (amountVnd > 10_000_000) {
+            throw new AppException(HttpStatus.BAD_REQUEST,
+                    "Số tiền nạp tối đa một lần là 10,000,000 VND.");
+        }
     }
 
     /**

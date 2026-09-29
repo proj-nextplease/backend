@@ -73,6 +73,10 @@ public class SecurityConfig {
                             .requestMatchers(HttpMethod.POST, "/api/v1/auth/login").permitAll()
                             .requestMatchers(HttpMethod.GET, "/api/v1/company/invitations/preview").permitAll()
                             .requestMatchers(HttpMethod.POST, "/api/v1/company/invitations/register").permitAll()
+                            // Webhook PayOS: máy chủ của họ gọi, không mang
+                            // token người dùng nào. An toàn KHÔNG đến từ lớp
+                            // này mà từ chữ ký HMAC kiểm trong PayOsService.
+                            .requestMatchers(HttpMethod.POST, "/api/v1/payments/payos/webhook").permitAll()
                             .requestMatchers("/actuator/health").permitAll()
                             .requestMatchers("/swagger-ui/**", "/v3/api-docs/**").permitAll()
                             .anyRequest().authenticated())
