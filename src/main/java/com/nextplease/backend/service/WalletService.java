@@ -296,6 +296,24 @@ public class WalletService {
      * Loc theo user_id chu khong chi order_code: khong co dieu kien do thi bat
      * ky ai doan duoc order_code cung xem duoc don nap cua nguoi khac.
      */
+    /**
+     * Đánh dấu một đơn nạp là đã huỷ.
+     *
+     * `status = 'PENDING'` trong mệnh đề where không phải để cho gọn — nó là
+     * thứ chặn việc huỷ nhầm một đơn đã PAID. Người dùng có thể chuyển khoản
+     * xong rồi mới bấm huỷ, hoặc webhook về đúng lúc họ đang bấm; nếu huỷ đè
+     * lên PAID thì tiền đã vào mà đơn lại thành CANCELLED.
+     *
+     * Kèm user_id để người này không huỷ được đơn của người khác — orderCode
+     * đi qua trình duyệt nên phải coi là sửa được.
+     */
+    public boolean cancelTopUpRequest(UUID userId, long orderCode) {
+        return jdbcTemplate.update("""
+                update payment_requests set status = 'CANCELLED'
+                where order_code = :orderCode and user_id = :userId and status = 'PENDING'
+                """, Map.of("orderCode", orderCode, "userId", userId)) == 1;
+    }
+
     public Map<String, Object> getTopUpStatus(UUID userId, long orderCode) {
         try {
             return jdbcTemplate.queryForMap("""
