@@ -76,6 +76,11 @@ public class SecurityConfig {
                             // Webhook PayOS: máy chủ của họ gọi, không mang
                             // token người dùng nào. An toàn KHÔNG đến từ lớp
                             // này mà từ chữ ký HMAC kiểm trong PayOsService.
+                            // Waitlist: người đăng ký chưa có tài khoản, đó là lý do họ ở đây.
+                            .requestMatchers(HttpMethod.POST, "/api/v1/waitlist").permitAll()
+                            .requestMatchers(HttpMethod.GET, "/api/v1/waitlist/count").permitAll()
+                            // Gác bằng token bí mật ở header, không bằng JWT — xem WaitlistController.
+                            .requestMatchers(HttpMethod.GET, "/api/v1/waitlist/export").permitAll()
                             .requestMatchers(HttpMethod.POST, "/api/v1/payments/payos/webhook").permitAll()
                             .requestMatchers("/actuator/health").permitAll()
                             .requestMatchers("/swagger-ui/**", "/v3/api-docs/**").permitAll()
