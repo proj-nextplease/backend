@@ -12,7 +12,8 @@
  *     được. Cũng vì vậy đừng dùng công thức =IMPORTDATA() kèm token trên ô —
  *     ai mở sheet cũng copy được URL rồi tải trọn danh sách.
  *  4. Chạy hàm `syncWaitlist` một lần để Google xin quyền.
- *  5. Chạy hàm `taoLichChay` một lần để đặt lịch tự chạy mỗi giờ.
+ *  5. Chạy hàm `taoLichChay` một lần để đặt lịch tự chạy (mặc định 5 phút/lần;
+ *     đổi ở hằng số PHUT_MOI_LAN bên dưới rồi chạy lại hàm này).
  *
  * Script GHI ĐÈ cả sheet mỗi lần chạy. Nhờ vậy thao tác là bất biến: chạy lại
  * bao nhiêu lần cũng ra cùng kết quả, không sinh dòng trùng, và dòng nào sửa
@@ -22,6 +23,13 @@
 
 const API_URL = 'https://api.fonlio.vn/api/v1/waitlist/export'; // ← đổi thành domain backend thật
 const SHEET_NAME = 'Waitlist';
+
+/* Bao lâu kéo dữ liệu một lần (phút).
+   Apps Script CHỈ nhận 1, 5, 10, 15 hoặc 30 — số khác thì `everyMinutes()`
+   ném lỗi khó hiểu, nên hàm taoLichChay chặn sẵn ở dưới.
+   Đổi số ở đây xong phải CHẠY LẠI `taoLichChay`, vì lịch cũ đã nằm bên Google
+   rồi, sửa file không tự đổi được nó. */
+const PHUT_MOI_LAN = 5;
 
 /* Thứ tự cột trên sheet. Thêm cột mới ở backend thì thêm một dòng vào đây. */
 const COLUMNS = [
@@ -97,10 +105,25 @@ function dinhDang(value) {
   return value;
 }
 
-/** Đặt lịch chạy mỗi giờ. Gỡ lịch cũ trước để chạy lại hàm này không nhân đôi. */
+/**
+ * Đặt lịch chạy định kỳ.
+ *
+ * Gỡ lịch cũ trước rồi mới tạo lịch mới: chạy lại hàm này nhiều lần sẽ không
+ * nhân đôi lịch, và đổi PHUT_MOI_LAN xong chỉ cần chạy lại là lịch đổi theo.
+ */
 function taoLichChay() {
+  const HOP_LE = [1, 5, 10, 15, 30];
+  if (HOP_LE.indexOf(PHUT_MOI_LAN) === -1) {
+    throw new Error(
+      'PHUT_MOI_LAN phải là một trong ' + HOP_LE.join(', ') + ' phút. '
+      + 'Google chỉ cho đặt lịch theo các mốc này, đang để ' + PHUT_MOI_LAN + '.'
+    );
+  }
+
   ScriptApp.getProjectTriggers().forEach(function (t) {
     if (t.getHandlerFunction() === 'syncWaitlist') ScriptApp.deleteTrigger(t);
   });
-  ScriptApp.newTrigger('syncWaitlist').timeBased().everyHours(1).create();
+  ScriptApp.newTrigger('syncWaitlist').timeBased().everyMinutes(PHUT_MOI_LAN).create();
+
+  Logger.log('Đã đặt lịch: kéo dữ liệu mỗi ' + PHUT_MOI_LAN + ' phút.');
 }
