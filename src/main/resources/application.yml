@@ -77,6 +77,14 @@ app:
     client-id: ${PAYOS_CLIENT_ID:}
     api-key: ${PAYOS_API_KEY:}
     checksum-key: ${PAYOS_CHECKSUM_KEY:}
+  waitlist:
+    # Token để Google Apps Script kéo danh sách waitlist về Google Sheet.
+    # RỖNG = endpoint xuất TẮT HẲN (trả 404). Đây là dữ liệu cá nhân — tên,
+    # email và cơ sở pháp lý để gửi thư — nên mặc định phải là đóng, bật lên
+    # là một hành động có chủ ý.
+    # Sinh token: `openssl rand -hex 32`. Đổi token là thu hồi quyền của mọi
+    # script đang dùng, không cần deploy lại gì khác.
+    export-token: ${WAITLIST_EXPORT_TOKEN:}
   careerjet:
     api-key: ${CAREERJET_API_KEY:}
   frontend:
