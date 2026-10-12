@@ -408,26 +408,26 @@ public class PremiumService {
     @Transactional
     public Map<String, Object> selectTheme(UUID userId, String themeCode) {
         // Validate inputs
-        List<String> validThemes = List.of("DEFAULT", "DARK_GOLD", "CYBERPUNK", "EMERALD_CLASSIC");
+        /* Sản phẩm chỉ còn một giao diện portfolio ("Cốm Neon", mã FOMLIO).
+           Bốn mã cũ — DEFAULT, DARK_GOLD, CYBERPUNK, EMERALD_CLASSIC — không
+           còn được dựng ở frontend nữa; hồ sơ nào còn ghi chúng trong DB vẫn
+           đọc bình thường, chỉ là hiện bằng giao diện duy nhất đang có.
+           Frontend web hiện không gọi endpoint này nữa; giữ lại để client cũ
+           không gãy. */
+        List<String> validThemes = List.of("FOMLIO");
         String code = themeCode != null ? themeCode.trim().toUpperCase() : "DEFAULT";
         if (!validThemes.contains(code)) {
             throw new AppException(HttpStatus.BAD_REQUEST, "Theme không hợp lệ.");
         }
 
-        // Fetch unlock state
-        Map<String, Object> profile;
+        /* Tính năng bán theme đã bỏ: chọn giao diện nào là quyền của người
+           dùng. Vẫn đọc hồ sơ một nhịp để câu update bên dưới không âm thầm
+           không khớp dòng nào khi hồ sơ chưa được khởi tạo. */
         try {
-            profile = jdbcTemplate.queryForMap("select theme_unlocked, selected_theme from profiles where user_id = :userId",
+            jdbcTemplate.queryForMap("select user_id from profiles where user_id = :userId",
                     Map.of("userId", userId));
         } catch (org.springframework.dao.EmptyResultDataAccessException e) {
             throw new ResourceNotFoundException("Hồ sơ của bạn chưa được khởi tạo.");
-        }
-
-        Boolean isUnlocked = (Boolean) profile.get("theme_unlocked");
-        if (!"DEFAULT".equals(code) && !Boolean.TRUE.equals(isUnlocked)) {
-            throw new AppException(HttpStatus.FORBIDDEN,
-                    "Bạn cần mở khóa tính năng Visual Upgrade để chọn theme chuyên nghiệp.",
-                    "THEME_LOCKED");
         }
 
         jdbcTemplate.update("update profiles set selected_theme = :theme, updated_at = now() where user_id = :userId",
