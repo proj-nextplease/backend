@@ -757,6 +757,10 @@ public class ProfileService {
                     social_links = cast(:socialLinks as jsonb),
                     cover_banner_url = :coverBannerUrl,
                     cover_banner_pos = :coverBannerPos,
+                    /* coalesce chứ không gán thẳng: client cũ không gửi
+                       trường này, gán thẳng là xoá trắng giao diện họ đã
+                       chọn mỗi lần họ lưu hồ sơ. */
+                    selected_theme = coalesce(:selectedTheme, selected_theme),
                     onboarding_completed = case when :isDraft = true then onboarding_completed else true end,
                     updated_at = now()
                 where id = :profileId
@@ -771,6 +775,7 @@ public class ProfileService {
                 .addValue("socialLinks", socialLinksJson)
                 .addValue("coverBannerUrl", blankToNull(request.coverBannerUrl()))
                 .addValue("coverBannerPos", blankToNull(request.coverBannerPos()))
+                .addValue("selectedTheme", normalizeTheme(request.selectedTheme()))
                 .addValue("profileId", profileId)
                 .addValue("isDraft", isDraft));
 
@@ -784,6 +789,17 @@ public class ProfileService {
         if (!isDraft && !wasOnboardingCompleted) {
             reputationService.addReputation(profileId, configService.getInt("rs_onboarding", 5), "ONBOARDING_COMPLETED", "profile", profileId);
         }
+    }
+
+    /** Danh sách mã giao diện frontend thật sự dựng được. Một mã lạ lọt vào
+     *  cột này thì trang hồ sơ rơi về giao diện mặc định — không vỡ, nhưng
+     *  người dùng chọn một đằng thấy một nẻo, nên chặn ngay ở đây. */
+    private static final List<String> THEME_CODES = List.of("FOMLIO", "NHO_NEON");
+
+    private String normalizeTheme(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        String code = raw.trim().toUpperCase();
+        return THEME_CODES.contains(code) ? code : null;
     }
 
     private void updateProfileSkills(UUID profileId, List<String> skillNames) {
