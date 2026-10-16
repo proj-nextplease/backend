@@ -408,13 +408,13 @@ public class PremiumService {
     @Transactional
     public Map<String, Object> selectTheme(UUID userId, String themeCode) {
         // Validate inputs
-        /* Sản phẩm chỉ còn một giao diện portfolio ("Cốm Neon", mã FOMLIO).
-           Bốn mã cũ — DEFAULT, DARK_GOLD, CYBERPUNK, EMERALD_CLASSIC — không
-           còn được dựng ở frontend nữa; hồ sơ nào còn ghi chúng trong DB vẫn
-           đọc bình thường, chỉ là hiện bằng giao diện duy nhất đang có.
-           Frontend web hiện không gọi endpoint này nữa; giữ lại để client cũ
-           không gãy. */
-        List<String> validThemes = List.of("FOMLIO");
+        /* Hai giao diện: FOMLIO ("Cốm Neon") và NHO_NEON ("Nho Neon") —
+           cùng bố cục, khác bảng màu. Bốn mã cũ (DEFAULT, DARK_GOLD,
+           CYBERPUNK, EMERALD_CLASSIC) không còn được dựng ở frontend; hồ sơ
+           nào còn ghi chúng vẫn đọc bình thường, chỉ hiện bằng giao diện mặc
+           định. Frontend web giờ lưu theme kèm trong payload portfolio, nên
+           endpoint này chỉ còn cho client cũ. */
+        List<String> validThemes = List.of("FOMLIO", "NHO_NEON");
         String code = themeCode != null ? themeCode.trim().toUpperCase() : "DEFAULT";
         if (!validThemes.contains(code)) {
             throw new AppException(HttpStatus.BAD_REQUEST, "Theme không hợp lệ.");

@@ -29,7 +29,11 @@ public record PortfolioRequest(
 
         /** Ảnh bìa (data URL hoặc http) và khung hình "x% y% zoom". */
         String coverBannerUrl,
-        String coverBannerPos
+        String coverBannerPos,
+
+        /** Mã giao diện portfolio, ví dụ FOMLIO hay NHO_NEON. Bỏ trống thì
+            giữ nguyên giao diện hồ sơ đang dùng. */
+        String selectedTheme
 ) {
 }
 

@@ -561,12 +561,24 @@ public class ProfileService {
                 where ps.profile_id = :profileId
                 """, Map.of("profileId", profileId), (rs, rowNum) -> rs.getString("name"));
 
-        // Public view shows only verified (APPROVED) experiences — never PENDING/REJECTED proof.
+        /* Trang công khai hiện cả mục ĐANG CHỜ DUYỆT, không chỉ mục đã duyệt.
+           Chỉ hiện mục đã duyệt nghe thì an toàn, nhưng hệ quả là một hồ sơ
+           mới tinh ra trang công khai HOÀN TOÀN TRỐNG phần portfolio — đúng
+           thứ người dùng gửi đi cho nhà tuyển dụng xem. Một portfolio rỗng
+           thì vô dụng, và chủ hồ sơ không hiểu vì sao.
+
+           Thứ cần giữ kín không phải bản thân lời khai, mà là việc hệ thống
+           có ĐỨNG RA BẢO CHỨNG cho nó hay không — và điều đó nằm ở cờ
+           `verified` bên dưới, chỉ bật khi APPROVED, để giao diện gắn huy
+           hiệu "Xác thực". Mục chờ duyệt hiện ra nhưng không có huy hiệu.
+
+           REJECTED và NEEDS_MORE_EVIDENCE vẫn bị giấu: đó là hai trường hợp
+           người duyệt đã xem và không chấp nhận, khác hẳn với chưa ai xem. */
         List<ExperienceDto> experiences = jdbcTemplate.query("""
                 select id, project_name, position, description, started_at, ended_at, proof_images::text as proof_images,
-                       category, role_level, proof_link from experiences
+                       category, role_level, proof_link, verification_status from experiences
                 where profile_id = :profileId
-                  and verification_status = 'APPROVED'
+                  and verification_status in ('APPROVED', 'PENDING')
                 order by created_at asc
                 """, Map.of("profileId", profileId), (rs, rowNum) -> new ExperienceDto(
                         rs.getString("id"),
@@ -579,7 +591,7 @@ public class ProfileService {
                         rs.getString("category"),
                         rs.getString("role_level"),
                         rs.getString("proof_link"),
-                        true,
+                        "APPROVED".equals(rs.getString("verification_status")),
                         ExperienceRewards.expFor(rs.getString("category")),
                         ExperienceRewards.rsFor(rs.getString("role_level"))
                 ));
@@ -745,6 +757,10 @@ public class ProfileService {
                     social_links = cast(:socialLinks as jsonb),
                     cover_banner_url = :coverBannerUrl,
                     cover_banner_pos = :coverBannerPos,
+                    /* coalesce chứ không gán thẳng: client cũ không gửi
+                       trường này, gán thẳng là xoá trắng giao diện họ đã
+                       chọn mỗi lần họ lưu hồ sơ. */
+                    selected_theme = coalesce(:selectedTheme, selected_theme),
                     onboarding_completed = case when :isDraft = true then onboarding_completed else true end,
                     updated_at = now()
                 where id = :profileId
@@ -759,6 +775,7 @@ public class ProfileService {
                 .addValue("socialLinks", socialLinksJson)
                 .addValue("coverBannerUrl", blankToNull(request.coverBannerUrl()))
                 .addValue("coverBannerPos", blankToNull(request.coverBannerPos()))
+                .addValue("selectedTheme", normalizeTheme(request.selectedTheme()))
                 .addValue("profileId", profileId)
                 .addValue("isDraft", isDraft));
 
@@ -772,6 +789,17 @@ public class ProfileService {
         if (!isDraft && !wasOnboardingCompleted) {
             reputationService.addReputation(profileId, configService.getInt("rs_onboarding", 5), "ONBOARDING_COMPLETED", "profile", profileId);
         }
+    }
+
+    /** Danh sách mã giao diện frontend thật sự dựng được. Một mã lạ lọt vào
+     *  cột này thì trang hồ sơ rơi về giao diện mặc định — không vỡ, nhưng
+     *  người dùng chọn một đằng thấy một nẻo, nên chặn ngay ở đây. */
+    private static final List<String> THEME_CODES = List.of("FOMLIO", "NHO_NEON");
+
+    private String normalizeTheme(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        String code = raw.trim().toUpperCase();
+        return THEME_CODES.contains(code) ? code : null;
     }
 
     private void updateProfileSkills(UUID profileId, List<String> skillNames) {
