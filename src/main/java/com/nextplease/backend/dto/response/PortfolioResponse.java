@@ -2,6 +2,7 @@ package com.nextplease.backend.dto.response;
 
 import com.nextplease.backend.dto.CredentialDto;
 import com.nextplease.backend.dto.ExperienceDto;
+import com.nextplease.backend.dto.SkillItemDto;
 import java.util.List;
 import java.util.Map;
 
@@ -12,6 +13,7 @@ public record PortfolioResponse(
         String location,
         String bio,
         List<String> skills,
+        List<SkillItemDto> skillDetails,
         Map<String, Object> avatar,
         String avatarUrl,
         String publicSlug,
