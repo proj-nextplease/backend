@@ -89,6 +89,10 @@ public class WalletService {
         result.put("recentTransactions", recentTx);
         result.put("premiumPriceNp", premiumPriceNp());
         result.put("minTopupVnd", minTopupVnd());
+        result.put("paidJobAcceptanceFeeNp", configService.getInt("paid_job_acceptance_fee_np", 19000));
+        result.put("portfolioExportFeeNp", configService.getInt("portfolio_export_fee_np", 1000));
+        result.put("defaultTopupPackageNp", configService.getInt("default_topup_package_np", 39000));
+        result.put("topupSuggestions", List.of(39000, 69000, 99000, 199000));
         return result;
     }
 

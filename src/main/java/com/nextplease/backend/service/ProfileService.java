@@ -1142,6 +1142,86 @@ public class ProfileService {
         return Map.of();
     }
 
+    /**
+     * Deducts portfolio_export_fee_np (1,000 NP / Điểm) from candidate's wallet,
+     * updates last_exported_at, increments export_count, ensures is_public = true,
+     * and returns the public portfolio website URL.
+     */
+    @Transactional
+    public Map<String, Object> exportPortfolioWebsite() {
+        UUID userId = currentUserService.getCurrentUser().appUserId();
+        int fee = configService.getInt("portfolio_export_fee_np", 1000);
 
+        // Lock wallet
+        Map<String, Object> wallet;
+        try {
+            wallet = jdbcTemplate.queryForMap(
+                    "select id, np_balance from wallets where user_id = :userId for update",
+                    Map.of("userId", userId));
+        } catch (EmptyResultDataAccessException e) {
+            throw new AppException(HttpStatus.NOT_FOUND, "Không tìm thấy ví của bạn.");
+        }
+
+        int currentBalance = ((Number) wallet.get("np_balance")).intValue();
+        if (currentBalance < fee) {
+            throw new AppException(HttpStatus.PAYMENT_REQUIRED,
+                    String.format("Số dư Điểm không đủ để xuất website. Cần %,d Điểm, hiện tại bạn có %,d Điểm. Vui lòng nạp thêm.", fee, currentBalance),
+                    "INSUFFICIENT_NP");
+        }
+
+        int balanceAfter = currentBalance - fee;
+        UUID walletId = (UUID) wallet.get("id");
+
+        jdbcTemplate.update("""
+                update wallets
+                set np_balance = :balanceAfter, updated_at = now()
+                where id = :walletId
+                """, Map.of("balanceAfter", balanceAfter, "walletId", walletId));
+
+        jdbcTemplate.update("""
+                insert into wallet_transactions (
+                    wallet_id, amount_np, balance_after_np, transaction_type, reason
+                ) values (
+                    :walletId, :amount, :balanceAfter, 'PORTFOLIO_EXPORT_FEE', :reason
+                )
+                """, Map.of(
+                "walletId", walletId,
+                "amount", -fee,
+                "balanceAfter", balanceAfter,
+                "reason", "Phí xuất Portfolio thành website công khai"
+        ));
+
+        // Update profile
+        jdbcTemplate.update("""
+                update profiles
+                set is_public = true,
+                    last_exported_at = now(),
+                    export_count = coalesce(export_count, 0) + 1,
+                    updated_at = now()
+                where user_id = :userId
+                """, Map.of("userId", userId));
+
+        // Get public slug or user id
+        String publicSlug = null;
+        try {
+            publicSlug = jdbcTemplate.queryForObject(
+                    "select public_slug from profiles where user_id = :userId",
+                    Map.of("userId", userId), String.class);
+        } catch (Exception ignored) {}
+
+        String publicUrl = publicSlug != null && !publicSlug.isBlank()
+                ? "/p/" + publicSlug
+                : "/portfolio/view/" + userId;
+
+        log.info("[ProfileService] User {} exported portfolio website (fee={}, url={})", userId, fee, publicUrl);
+
+        return Map.of(
+                "success", true,
+                "feeDeducted", fee,
+                "publicUrl", publicUrl,
+                "exportedAt", java.time.OffsetDateTime.now().toString(),
+                "message", "Xuất Portfolio thành website thành công!"
+        );
+    }
 }
 

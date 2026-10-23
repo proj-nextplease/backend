@@ -58,4 +58,9 @@ public class ProfileController {
         profileService.updatePortfolio(request, isDraft);
         return ApiResponse.success("Lưu portfolio thành công!");
     }
+
+    @org.springframework.web.bind.annotation.PostMapping("/me/export-website")
+    public ApiResponse<Map<String, Object>> exportPortfolioWebsite() {
+        return ApiResponse.success(profileService.exportPortfolioWebsite());
+    }
 }
