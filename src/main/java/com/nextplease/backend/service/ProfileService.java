@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nextplease.backend.dto.CredentialDto;
 import com.nextplease.backend.dto.ExperienceDto;
+import com.nextplease.backend.dto.SkillItemDto;
 import com.nextplease.backend.dto.request.PortfolioRequest;
 import com.nextplease.backend.dto.response.PortfolioResponse;
 import com.nextplease.backend.dto.response.PublicPortfolioResponse;
@@ -286,6 +287,18 @@ public class ProfileService {
                 where ps.profile_id = :profileId
                 """, Map.of("profileId", profileId), (rs, rowNum) -> rs.getString("name"));
 
+        List<SkillItemDto> skillDetails = jdbcTemplate.query("""
+                select s.name, coalesce(s.category, 'TECH') as category, coalesce(ps.proficiency_level, 'INTERMEDIATE') as proficiency_level
+                from skills s
+                join profile_skills ps on ps.skill_id = s.id
+                where ps.profile_id = :profileId
+                order by ps.created_at asc
+                """, Map.of("profileId", profileId), (rs, rowNum) -> new SkillItemDto(
+                        rs.getString("name"),
+                        rs.getString("category"),
+                        rs.getString("proficiency_level")
+                ));
+
         // 6. Get experiences
         List<ExperienceDto> experiences = jdbcTemplate.query("""
                 select id, project_name, position, description, started_at, ended_at, proof_images::text as proof_images,
@@ -325,6 +338,7 @@ public class ProfileService {
                 location,
                 bio,
                 skills,
+                skillDetails,
                 avatarConfig,
                 avatarUrl,
                 publicSlug,
@@ -561,6 +575,18 @@ public class ProfileService {
                 where ps.profile_id = :profileId
                 """, Map.of("profileId", profileId), (rs, rowNum) -> rs.getString("name"));
 
+        List<SkillItemDto> skillDetails = jdbcTemplate.query("""
+                select s.name, coalesce(s.category, 'TECH') as category, coalesce(ps.proficiency_level, 'INTERMEDIATE') as proficiency_level
+                from skills s
+                join profile_skills ps on ps.skill_id = s.id
+                where ps.profile_id = :profileId
+                order by ps.created_at asc
+                """, Map.of("profileId", profileId), (rs, rowNum) -> new SkillItemDto(
+                        rs.getString("name"),
+                        rs.getString("category"),
+                        rs.getString("proficiency_level")
+                ));
+
         /* Trang công khai hiện cả mục ĐANG CHỜ DUYỆT, không chỉ mục đã duyệt.
            Chỉ hiện mục đã duyệt nghe thì an toàn, nhưng hệ quả là một hồ sơ
            mới tinh ra trang công khai HOÀN TOÀN TRỐNG phần portfolio — đúng
@@ -619,7 +645,7 @@ public class ProfileService {
 
         return new PublicPortfolioResponse(
                 displayName, headline, schoolName, location, bio,
-                skills, avatarConfig,
+                skills, skillDetails, avatarConfig,
                 (String) profile.get("avatar_url"),
                 (String) profile.get("cover_banner_url"),
                 (String) profile.get("cover_banner_pos"),
