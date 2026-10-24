@@ -1209,6 +1209,16 @@ public class ProfileService {
                     Map.of("userId", userId), String.class);
         } catch (Exception ignored) {}
 
+        if (publicSlug == null || publicSlug.isBlank()) {
+            String displayName = null;
+            try {
+                displayName = jdbcTemplate.queryForObject(
+                        "select display_name from app_users where id = :userId",
+                        Map.of("userId", userId), String.class);
+            } catch (Exception ignored) {}
+            publicSlug = ensurePublicSlug(userId, null, displayName != null ? displayName : "ung-vien");
+        }
+
         String publicUrl = publicSlug != null && !publicSlug.isBlank()
                 ? "/p/" + publicSlug
                 : "/portfolio/view/" + userId;
@@ -1218,7 +1228,9 @@ public class ProfileService {
         return Map.of(
                 "success", true,
                 "feeDeducted", fee,
+                "balanceAfter", balanceAfter,
                 "publicUrl", publicUrl,
+                "publicSlug", publicSlug != null ? publicSlug : "",
                 "exportedAt", java.time.OffsetDateTime.now().toString(),
                 "message", "Xuất Portfolio thành website thành công!"
         );
