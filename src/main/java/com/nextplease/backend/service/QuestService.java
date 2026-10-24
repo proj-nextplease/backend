@@ -311,7 +311,7 @@ public class QuestService {
                 join companies c on c.id = q.company_id
                 left join ratings r on r.quest_application_id = qa.id
                 where qa.candidate_id = :userId
-                order by qa.applied_at desc
+                order by case when qa.status = 'ACCEPTED' then 0 else 1 end, qa.updated_at desc, qa.applied_at desc
                 """, Map.of("userId", userId));
     }
 
@@ -487,7 +487,7 @@ public class QuestService {
         try {
             qaInfo = jdbcTemplate.queryForMap("""
                     select qa.id, qa.candidate_id, qa.status, q.id as quest_id, q.category,
-                           q.exp_reward, q.np_reward, q.title as quest_title
+                           q.exp_reward, q.np_reward, q.title as quest_title, c.name as company_name
                     from quest_applications qa
                     join quests q on q.id = qa.quest_id
                     join companies c on c.id = q.company_id
@@ -556,20 +556,36 @@ public class QuestService {
         // Notify the candidate about the status change.
         UUID candidateUserId = (UUID) qaInfo.get("candidate_id");
         String questTitle = (String) qaInfo.get("quest_title");
+        String companyName = (String) qaInfo.get("company_name");
         UUID questId = (UUID) qaInfo.get("quest_id");
-        String statusLabel = switch (newStatus) {
-            case "ACCEPTED" -> "đã được chấp nhận 🎉";
-            case "REJECTED" -> "đã bị từ chối";
-            case "COMPLETED" -> "đã hoàn thành — bạn được cộng EXP/NP!";
-            default -> "đã được cập nhật";
-        };
+
+        String notifTitle;
+        String notifBody;
+        String notifLink;
+
+        if ("ACCEPTED".equals(newStatus)) {
+            notifTitle = "🎉 Đơn tham gia Quest được duyệt: " + questTitle;
+            notifBody = "CLB \"" + (companyName != null ? companyName : "Ban tổ chức")
+                    + "\" đã chấp nhận đơn tham gia Quest \"" + questTitle + "\" của bạn! Hãy chuẩn bị hoàn thành để nhận EXP & Điểm.";
+            notifLink = "/candidates/dashboard/applications";
+        } else if ("COMPLETED".equals(newStatus)) {
+            notifTitle = "Hoàn thành Quest: " + questTitle;
+            notifBody = "Đơn tham gia Quest \"" + questTitle + "\" của bạn đã hoàn thành — bạn được cộng EXP và Điểm!";
+            notifLink = "/candidates/dashboard/applications";
+        } else if ("REJECTED".equals(newStatus)) {
+            notifTitle = "Cập nhật tham gia Quest: " + questTitle;
+            notifBody = "Đơn tham gia Quest \"" + questTitle + "\" của bạn đã bị từ chối"
+                    + (rejectReason != null && !rejectReason.isBlank() ? " (Lý do: " + rejectReason + ")" : "");
+            notifLink = "/candidates/dashboard/applications";
+        } else {
+            notifTitle = "Cập nhật tham gia Quest";
+            notifBody = "Đơn tham gia Quest \"" + questTitle + "\" của bạn đã được cập nhật.";
+            notifLink = questId != null ? "/quests/" + questId : "/candidates/dashboard/applications";
+        }
+
         boolean emailWorthy = newStatus.equals("ACCEPTED") || newStatus.equals("REJECTED") || newStatus.equals("COMPLETED");
         notificationService.notify(candidateUserId, "QUEST_STATUS",
-                "Cập nhật tham gia Quest",
-                "Đơn tham gia Quest \"" + questTitle + "\" của bạn " + statusLabel
-                        + ("REJECTED".equals(newStatus) && rejectReason != null && !rejectReason.isBlank() ? " (Lý do: " + rejectReason + ")" : ""),
-                questId != null ? "/quests/" + questId : null,
-                emailWorthy);
+                notifTitle, notifBody, notifLink, emailWorthy);
     }
 
     // ── private helpers ───────────────────────────────────────────────────────

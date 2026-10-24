@@ -258,7 +258,7 @@ public class ApplicationService {
         Map<String, Object> appInfo;
         try {
             appInfo = jdbcTemplate.queryForMap("""
-                    select a.id, a.candidate_id, a.status, a.job_id, j.job_type, j.title as job_title, j.capacity from applications a
+                    select a.id, a.candidate_id, a.status, a.job_id, j.job_type, j.title as job_title, j.capacity, c.name as company_name from applications a
                     join jobs j on j.id = a.job_id
                     join companies c on c.id = j.company_id
                     where a.id = :appId
@@ -336,23 +336,46 @@ public class ApplicationService {
         // Notify the candidate about the status change.
         UUID candidateUserId = (UUID) appInfo.get("candidate_id");
         String jobTitle = (String) appInfo.get("job_title");
+        String companyName = (String) appInfo.get("company_name");
         UUID jobId = (UUID) appInfo.get("job_id");
-        String statusLabel = switch (newStatus) {
-            case "VIEWED" -> "đã được xem";
-            case "SHORTLISTED" -> "đã vào danh sách tiềm năng";
-            case "OFFERED" -> "đã nhận được lời mời tuyển dụng! Hãy kiểm tra và xác nhận nhận việc 🎉";
-            case "ACCEPTED" -> "đã được chấp nhận 🎉";
-            case "REJECTED" -> "đã bị từ chối";
-            case "COMPLETED" -> "đã hoàn thành — bạn được cộng điểm!";
-            default -> "đã được cập nhật";
-        };
+
+        String notifTitle;
+        String notifBody;
+        String notifLink;
+
+        if ("OFFERED".equals(newStatus)) {
+            notifTitle = "🎉 Lời mời nhận việc: " + jobTitle;
+            notifBody = (companyName != null ? companyName : "Nhà tuyển dụng")
+                    + " đã gửi lời mời nhận việc cho vị trí \"" + jobTitle + "\". Hãy vào Fonlio để kiểm tra và xác nhận nhận việc!";
+            notifLink = "/candidates/dashboard/applications";
+        } else if ("ACCEPTED".equals(newStatus)) {
+            notifTitle = "🎉 Đơn ứng tuyển đã được chấp nhận!";
+            notifBody = "Đơn ứng tuyển \"" + jobTitle + "\" của bạn tại "
+                    + (companyName != null ? companyName : "doanh nghiệp") + " đã được chấp nhận.";
+            notifLink = "/candidates/dashboard/applications";
+        } else if ("REJECTED".equals(newStatus)) {
+            notifTitle = "Cập nhật đơn ứng tuyển: " + jobTitle;
+            notifBody = "Đơn ứng tuyển \"" + jobTitle + "\" của bạn đã bị từ chối"
+                    + (rejectReason != null && !rejectReason.isBlank() ? " (Lý do: " + rejectReason + ")" : "");
+            notifLink = "/candidates/dashboard/applications";
+        } else if ("COMPLETED".equals(newStatus)) {
+            notifTitle = "Hoàn thành công việc: " + jobTitle;
+            notifBody = "Đơn ứng tuyển \"" + jobTitle + "\" của bạn đã hoàn thành — bạn được cộng điểm!";
+            notifLink = "/candidates/dashboard/applications";
+        } else {
+            notifTitle = "Cập nhật đơn ứng tuyển";
+            String statusLabel = switch (newStatus) {
+                case "VIEWED" -> "đã được xem";
+                case "SHORTLISTED" -> "đã vào danh sách tiềm năng";
+                default -> "đã được cập nhật";
+            };
+            notifBody = "Đơn ứng tuyển \"" + jobTitle + "\" của bạn " + statusLabel;
+            notifLink = jobId != null ? "/jobs/" + jobId : "/candidates/dashboard/applications";
+        }
+
         boolean emailWorthy = newStatus.equals("OFFERED") || newStatus.equals("ACCEPTED") || newStatus.equals("REJECTED") || newStatus.equals("COMPLETED");
         notificationService.notify(candidateUserId, "APPLICATION_STATUS",
-                "Cập nhật đơn ứng tuyển",
-                "Đơn ứng tuyển \"" + jobTitle + "\" của bạn " + statusLabel
-                        + ("REJECTED".equals(newStatus) && rejectReason != null && !rejectReason.isBlank() ? " (Lý do: " + rejectReason + ")" : ""),
-                jobId != null ? "/jobs/" + jobId : null,
-                emailWorthy);
+                notifTitle, notifBody, notifLink, emailWorthy);
     }
 
     /** Returns all applications for the given candidate, newest first. */
@@ -389,7 +412,7 @@ public class ApplicationService {
                 join companies c on c.id = j.company_id
                 left join ratings r on r.application_id = a.id
                 where a.candidate_id = :userId
-                order by a.applied_at desc
+                order by case when a.status = 'OFFERED' then 0 when a.status = 'SHORTLISTED' then 1 else 2 end, a.updated_at desc, a.applied_at desc
                 """, Map.of("userId", userId));
     }
 

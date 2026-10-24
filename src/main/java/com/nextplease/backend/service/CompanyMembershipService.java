@@ -43,6 +43,7 @@ public class CompanyMembershipService {
     private final CompanyAccessService companyAccessService;
     private final EmailDeliveryService emailDeliveryService;
     private final SupabaseAdminService supabaseAdminService;
+    private final NotificationService notificationService;
     private final String frontendBaseUrl;
 
     public CompanyMembershipService(
@@ -50,6 +51,7 @@ public class CompanyMembershipService {
             CompanyAccessService companyAccessService,
             EmailDeliveryService emailDeliveryService,
             SupabaseAdminService supabaseAdminService,
+            NotificationService notificationService,
             @Value("${app.frontend.base-url:http://localhost:5173}") String frontendBaseUrl,
             @Value("${app.cors.allowed-origins:http://localhost:5173}") String allowedOrigins
     ) {
@@ -57,6 +59,7 @@ public class CompanyMembershipService {
         this.companyAccessService = companyAccessService;
         this.emailDeliveryService = emailDeliveryService;
         this.supabaseAdminService = supabaseAdminService;
+        this.notificationService = notificationService;
 
         String resolvedBaseUrl = frontendBaseUrl;
         if (resolvedBaseUrl.contains("localhost") || resolvedBaseUrl.contains("127.0.0.1")) {
@@ -144,6 +147,9 @@ public class CompanyMembershipService {
 
         String inviteUrl = frontendBaseUrl + "/business/accept-invite?token=" + rawToken;
         Map<String, Object> delivery = deliverInvite(normalizedEmail, companyName, role, inviteUrl, expiresAt);
+
+        // Also notify in-app if recipient already has an account
+        notifyUserIfRegistered(normalizedEmail, companyName, role, rawToken);
 
         writeAudit(actorUserId, "company.member_invited", companyId,
                 "{\"email\":\"" + normalizedEmail + "\",\"role\":\"" + role + "\"}");
@@ -461,6 +467,9 @@ public class CompanyMembershipService {
         String inviteUrl = frontendBaseUrl + "/business/accept-invite?token=" + rawToken;
         Map<String, Object> delivery = deliverInvite(email, companyName, role, inviteUrl, expiresAt);
 
+        // Also notify in-app if recipient already has an account
+        notifyUserIfRegistered(email, companyName, role, rawToken);
+
         writeAudit(actorUserId, "company.invitation_resent", companyId, "{\"email\":\"" + email + "\"}");
 
         Map<String, Object> result = new HashMap<>();
@@ -738,5 +747,100 @@ public class CompanyMembershipService {
         } catch (Exception e) {
             throw new IllegalStateException("SHA-256 not available", e);
         }
+    }
+
+    private void notifyUserIfRegistered(String email, String companyName, String role, String rawToken) {
+        if (email == null || email.isBlank()) return;
+        try {
+            UUID targetUserId = jdbcTemplate.queryForObject(
+                    "select id from app_users where lower(email) = lower(:email)",
+                    Map.of("email", email.trim()), UUID.class);
+            if (targetUserId != null) {
+                notificationService.notify(targetUserId, "COMPANY_INVITATION",
+                        "🎉 Lời mời tham gia " + companyName,
+                        "Doanh nghiệp / CLB \"" + companyName + "\" đã gửi lời mời bạn tham gia tổ chức với vai trò " + roleLabel(role) + ". Nhấn vào đây để xem và chấp nhận.",
+                        "/business/accept-invite?token=" + rawToken,
+                        false);
+            }
+        } catch (org.springframework.dao.EmptyResultDataAccessException ignored) {
+            // User does not exist yet; they will accept upon registering
+        } catch (Exception e) {
+            log.warn("[CompanyMembershipService] Failed to notify invited user: {}", e.getMessage());
+        }
+    }
+
+    public List<Map<String, Object>> myPendingInvitations(String email) {
+        if (email == null || email.isBlank()) return List.of();
+        return jdbcTemplate.queryForList("""
+                select ci.id,
+                       ci.node_role as "nodeRole",
+                       ci.status,
+                       ci.expires_at as "expiresAt",
+                       ci.created_at as "createdAt",
+                       c.id as "companyId",
+                       c.name as "companyName",
+                       c.logo_url as "companyLogo",
+                       c.company_type as "companyType"
+                from company_invitations ci
+                join companies c on c.id = ci.company_id
+                where lower(ci.invited_email) = lower(:email)
+                  and ci.status = 'PENDING'
+                  and ci.expires_at > now()
+                order by ci.created_at desc
+                """, Map.of("email", email.trim()));
+    }
+
+    @Transactional
+    public Map<String, Object> acceptMyPendingInvitation(UUID userId, UUID invitationId) {
+        Map<String, Object> user = jdbcTemplate.queryForMap(
+                "select email from app_users where id = :userId", Map.of("userId", userId));
+        String userEmail = (String) user.get("email");
+
+        Map<String, Object> invite;
+        try {
+            invite = jdbcTemplate.queryForMap("""
+                    select ci.id, ci.company_id, ci.invited_email, ci.node_role, ci.status, ci.expires_at,
+                           c.name as company_name, c.company_type
+                    from company_invitations ci
+                    join companies c on c.id = ci.company_id
+                    where ci.id = :id and lower(ci.invited_email) = lower(:email)
+                    """, Map.of("id", invitationId, "email", userEmail));
+        } catch (org.springframework.dao.EmptyResultDataAccessException e) {
+            throw new ResourceNotFoundException("Không tìm thấy lời mời.");
+        }
+
+        if (!"PENDING".equals(invite.get("status"))) {
+            throw new AppException(HttpStatus.CONFLICT, "Lời mời này không còn hiệu lực.");
+        }
+        OffsetDateTime expiresAt = (OffsetDateTime) invite.get("expires_at");
+        if (expiresAt.isBefore(OffsetDateTime.now(VN_ZONE))) {
+            jdbcTemplate.update("update company_invitations set status='EXPIRED', updated_at=now() where id=:id",
+                    Map.of("id", invitationId));
+            throw new AppException(HttpStatus.GONE, "Lời mời đã hết hạn.");
+        }
+
+        UUID companyId = (UUID) invite.get("company_id");
+        String role = (String) invite.get("node_role");
+        String companyType = (String) invite.get("company_type");
+        String nodeType = "CLUB".equalsIgnoreCase(companyType) ? "CLUB_MEMBER" : "COMPANY_MEMBER";
+
+        // Bind member
+        jdbcTemplate.update("""
+                insert into authority_nodes (company_id, user_id, node_type, node_role, status, approved_by, approved_at)
+                values (:companyId, :userId, :nodeType, :role, 'ACTIVE', :userId, now())
+                on conflict (company_id, user_id) where status <> 'REJECTED' and deleted_at is null
+                do update set node_role = :role, status = 'ACTIVE', updated_at = now()
+                """, Map.of("companyId", companyId, "userId", userId, "nodeType", nodeType, "role", role));
+
+        jdbcTemplate.update("""
+                update company_invitations
+                set status = 'ACCEPTED', accepted_by = :userId, accepted_at = now(), updated_at = now()
+                where id = :id
+                """, Map.of("id", invitationId, "userId", userId));
+
+        writeAudit(userId, "company.invitation_accepted_direct", companyId,
+                "{\"invitationId\":\"" + invitationId + "\",\"role\":\"" + role + "\"}");
+
+        return Map.of("companyId", companyId, "companyName", invite.get("company_name"), "role", role);
     }
 }
