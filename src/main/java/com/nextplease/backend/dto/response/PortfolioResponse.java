@@ -34,6 +34,7 @@ public record PortfolioResponse(
         String legalConsentVersion,
         boolean isPublic,
         boolean isExported,
-        String lastExportedAt
+        String lastExportedAt,
+        boolean hasUnpublishedChanges
 ) {
 }
