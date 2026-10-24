@@ -35,6 +35,8 @@ public record PublicPortfolioResponse(
         boolean openToWork,
         Map<String, Object> socialLinks,
         /** Huy hiệu Premium trên link hồ sơ ứng viên gửi cho nhà tuyển dụng. */
-        boolean isPremium
+        boolean isPremium,
+        /** Đã xuất bản thành website chính thức (1.000 Điểm) hay vẫn là bản xem trước. */
+        boolean isExported
 ) {
 }

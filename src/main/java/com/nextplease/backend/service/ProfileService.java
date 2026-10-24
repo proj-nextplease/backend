@@ -535,26 +535,7 @@ public class ProfileService {
 
         boolean isExported = profile.get("last_exported_at") != null
                 || (profile.get("export_count") != null && ((Number) profile.get("export_count")).intValue() > 0);
-        boolean isPublic = profile.get("is_public") != null && (Boolean) profile.get("is_public") && isExported;
-        if (!isPublic) {
-            // Private portfolio: the share link is otherwise unauthenticated
-            // (permitAll), so only let it through for the owner previewing
-            // their own link, or a business/admin who legitimately needs to
-            // review this candidate (e.g. an applicant) regardless of the
-            // public-sharing toggle.
-            boolean allowed = currentUserService.tryGetCurrentUser()
-                    .map(me -> me.appUserId().equals(userId)
-                            || me.roles().contains("admin")
-                            || me.roles().contains("employer_free")
-                            || me.roles().contains("employer_premium")
-                            || me.roles().contains("organizer"))
-                    .orElse(false);
-            if (!allowed) {
-                throw new com.nextplease.backend.exception.AppException(
-                        org.springframework.http.HttpStatus.FORBIDDEN,
-                        "Portfolio này đang ở chế độ bản nháp (chưa được xuất bản công khai).");
-            }
-        }
+
 
         UUID profileId = (UUID) profile.get("id");
         String headline = (String) profile.get("headline");
@@ -662,7 +643,8 @@ public class ProfileService {
                 experiences, credentials,
                 reputationScore, totalExp, currentLevel,
                 selectedTheme, themeUnlocked,
-                openToWork, socialLinks, isPremium
+                openToWork, socialLinks, isPremium,
+                isExported
         );
     }
 
