@@ -541,7 +541,7 @@ public class ApplicationService {
         String candidateName = null;
         try {
             candidateName = jdbcTemplate.queryForObject(
-                    "select coalesce(name, full_name, username, 'Ứng viên') from app_users u left join profiles p on p.user_id = u.id where u.id = :userId",
+                    "select coalesce(display_name, 'Ứng viên') from app_users where id = :userId",
                     Map.of("userId", userId), String.class);
         } catch (Exception ignored) {
             candidateName = "Ứng viên";
@@ -610,7 +610,7 @@ public class ApplicationService {
         String candidateName = null;
         try {
             candidateName = jdbcTemplate.queryForObject(
-                    "select coalesce(name, full_name, username, 'Ứng viên') from app_users u left join profiles p on p.user_id = u.id where u.id = :userId",
+                    "select coalesce(display_name, 'Ứng viên') from app_users where id = :userId",
                     Map.of("userId", userId), String.class);
         } catch (Exception ignored) {
             candidateName = "Ứng viên";
