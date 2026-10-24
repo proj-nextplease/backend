@@ -508,15 +508,18 @@ public class ApplicationService {
 
             jdbcTemplate.update("""
                     insert into wallet_transactions (
-                        wallet_id, amount_np, balance_after_np, transaction_type, reason
+                        wallet_id, amount_np, balance_after_np, transaction_type, reason,
+                        source_type, source_id
                     ) values (
-                        :walletId, :amount, :balanceAfter, 'JOB_ACCEPTANCE_FEE', :reason
+                        :walletId, :amount, :balanceAfter, 'JOB_ACCEPTANCE_FEE', :reason,
+                        'job_application', :applicationId
                     )
                     """, Map.of(
                     "walletId", walletId,
                     "amount", -fee,
                     "balanceAfter", balanceAfter,
-                    "reason", "Phí xác nhận nhận việc có trả lương: " + app.get("job_title")
+                    "reason", "Phí xác nhận nhận việc có trả lương: " + app.get("job_title"),
+                    "applicationId", applicationId
             ));
         }
 
