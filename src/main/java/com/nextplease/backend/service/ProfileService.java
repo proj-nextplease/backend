@@ -238,19 +238,19 @@ public class ProfileService {
         Map<String, Object> profile;
         try {
             profile = jdbcTemplate.queryForMap("""
-                    select id, headline, bio, location, school_id, avatar_config, avatar_url, public_slug, cover_banner_url, cover_banner_pos, credentials, onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked, open_to_work, social_links
+                    select id, headline, bio, location, school_id, avatar_config, avatar_url, public_slug, cover_banner_url, cover_banner_pos, credentials, onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked, open_to_work, social_links, is_public, last_exported_at, export_count
                     from profiles where user_id = :userId
                     """, Map.of("userId", userId));
         } catch (EmptyResultDataAccessException e) {
             log.info("Profile not found for user {}, creating default profile", userId);
             UUID profileId = UUID.randomUUID();
             jdbcTemplate.update("""
-                    insert into profiles (id, user_id, headline, visibility)
-                    values (:id, :userId, 'Ứng viên nextplease', '{}'::jsonb)
+                    insert into profiles (id, user_id, headline, visibility, is_public)
+                    values (:id, :userId, 'Ứng viên nextplease', '{}'::jsonb, false)
                     """, Map.of("id", profileId, "userId", userId));
 
             profile = jdbcTemplate.queryForMap("""
-                    select id, headline, bio, location, school_id, avatar_config, avatar_url, public_slug, cover_banner_url, cover_banner_pos, credentials, onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked, open_to_work, social_links
+                    select id, headline, bio, location, school_id, avatar_config, avatar_url, public_slug, cover_banner_url, cover_banner_pos, credentials, onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked, open_to_work, social_links, is_public, last_exported_at, export_count
                     from profiles where user_id = :userId
                     """, Map.of("userId", userId));
         }
@@ -331,6 +331,11 @@ public class ProfileService {
         boolean openToWork = profile.get("open_to_work") != null && (Boolean) profile.get("open_to_work");
         Map<String, Object> socialLinks = parseJsonMap(getJsonString(profile.get("social_links")));
 
+        boolean isPublic = profile.get("is_public") != null && (Boolean) profile.get("is_public");
+        boolean isExported = profile.get("last_exported_at") != null
+                || (profile.get("export_count") != null && ((Number) profile.get("export_count")).intValue() > 0);
+        String lastExportedAt = profile.get("last_exported_at") != null ? profile.get("last_exported_at").toString() : null;
+
         return new PortfolioResponse(
                 displayName,
                 headline,
@@ -355,7 +360,10 @@ public class ProfileService {
                 themeUnlocked,
                 openToWork,
                 socialLinks,
-                legalConsentService.latestAcceptedVersion(userId)
+                legalConsentService.latestAcceptedVersion(userId),
+                isPublic,
+                isExported,
+                lastExportedAt
         );
     }
 
@@ -518,14 +526,16 @@ public class ProfileService {
                     select id, headline, bio, location, school_id, avatar_config, avatar_url,
                            cover_banner_url, cover_banner_pos, credentials::text as credentials,
                            onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked,
-                           open_to_work, social_links::text as social_links, is_public
+                           open_to_work, social_links::text as social_links, is_public, last_exported_at, export_count
                     from profiles where user_id = :userId
                     """, Map.of("userId", userId));
         } catch (EmptyResultDataAccessException e) {
             throw new ResourceNotFoundException("Không tìm thấy hồ sơ ứng viên.");
         }
 
-        boolean isPublic = profile.get("is_public") == null || (Boolean) profile.get("is_public");
+        boolean isExported = profile.get("last_exported_at") != null
+                || (profile.get("export_count") != null && ((Number) profile.get("export_count")).intValue() > 0);
+        boolean isPublic = profile.get("is_public") != null && (Boolean) profile.get("is_public") && isExported;
         if (!isPublic) {
             // Private portfolio: the share link is otherwise unauthenticated
             // (permitAll), so only let it through for the owner previewing
@@ -542,7 +552,7 @@ public class ProfileService {
             if (!allowed) {
                 throw new com.nextplease.backend.exception.AppException(
                         org.springframework.http.HttpStatus.FORBIDDEN,
-                        "Portfolio này đang được đặt ở chế độ riêng tư.");
+                        "Portfolio này đang ở chế độ bản nháp (chưa được xuất bản công khai).");
             }
         }
 
