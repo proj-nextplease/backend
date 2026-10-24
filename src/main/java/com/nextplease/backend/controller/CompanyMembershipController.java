@@ -99,6 +99,18 @@ public class CompanyMembershipController {
         return ApiResponse.success(result);
     }
 
+    @GetMapping("/my-pending-invitations")
+    public ApiResponse<List<Map<String, Object>>> myPendingInvitations() {
+        String email = currentUserService.getCurrentUser().email();
+        return ApiResponse.success(membershipService.myPendingInvitations(email));
+    }
+
+    @PostMapping("/invitations/{invitationId}/accept-direct")
+    public ApiResponse<Map<String, Object>> acceptDirectInvitation(@PathVariable UUID invitationId) {
+        Map<String, Object> result = membershipService.acceptMyPendingInvitation(actorId(), invitationId);
+        return ApiResponse.success(result);
+    }
+
     // ── Public endpoints (no auth) for brand-new invitees ──
 
     @GetMapping("/invitations/preview")

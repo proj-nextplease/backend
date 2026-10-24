@@ -5,6 +5,7 @@ import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -25,10 +26,16 @@ public class NotificationService {
 
     private final NamedParameterJdbcTemplate jdbcTemplate;
     private final EmailDeliveryService emailDeliveryService;
+    private final String frontendBaseUrl;
 
-    public NotificationService(NamedParameterJdbcTemplate jdbcTemplate, EmailDeliveryService emailDeliveryService) {
+    public NotificationService(
+            NamedParameterJdbcTemplate jdbcTemplate,
+            EmailDeliveryService emailDeliveryService,
+            @Value("${app.frontend.base-url:http://localhost:5173}") String frontendBaseUrl
+    ) {
         this.jdbcTemplate = jdbcTemplate;
         this.emailDeliveryService = emailDeliveryService;
+        this.frontendBaseUrl = frontendBaseUrl;
     }
 
     /** Create an in-app notification for a recipient. Never throws to the caller. */
@@ -213,7 +220,10 @@ public class NotificationService {
     private String toAbsoluteLink(String link) {
         if (link == null || link.isBlank() || link.startsWith("http")) return link;
         String base = System.getenv().getOrDefault("APP_PUBLIC_URL", "");
-        return base.isBlank() ? null : base.replaceAll("/+$", "") + link;
+        if (base.isBlank()) {
+            base = frontendBaseUrl != null && !frontendBaseUrl.isBlank() ? frontendBaseUrl : "http://localhost:5173";
+        }
+        return base.replaceAll("/+$", "") + (link.startsWith("/") ? link : "/" + link);
     }
 
     /** Recent notifications (max 30) + unread count. */

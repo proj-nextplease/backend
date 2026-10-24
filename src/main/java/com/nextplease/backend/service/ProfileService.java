@@ -238,19 +238,31 @@ public class ProfileService {
         Map<String, Object> profile;
         try {
             profile = jdbcTemplate.queryForMap("""
-                    select id, headline, bio, location, school_id, avatar_config, avatar_url, public_slug, cover_banner_url, cover_banner_pos, credentials, onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked, open_to_work, social_links
+                    select id, headline, bio, location, school_id, avatar_config, avatar_url, public_slug, cover_banner_url, cover_banner_pos, credentials, onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked, open_to_work, social_links, is_public, last_exported_at, export_count,
+                           published_snapshot::text as published_snapshot,
+                           case
+                               when published_snapshot is null then true
+                               when updated_at > last_exported_at + interval '2 seconds' then true
+                               else false
+                           end as has_unpublished_changes
                     from profiles where user_id = :userId
                     """, Map.of("userId", userId));
         } catch (EmptyResultDataAccessException e) {
             log.info("Profile not found for user {}, creating default profile", userId);
             UUID profileId = UUID.randomUUID();
             jdbcTemplate.update("""
-                    insert into profiles (id, user_id, headline, visibility)
-                    values (:id, :userId, 'Ứng viên nextplease', '{}'::jsonb)
+                    insert into profiles (id, user_id, headline, visibility, is_public)
+                    values (:id, :userId, 'Ứng viên nextplease', '{}'::jsonb, false)
                     """, Map.of("id", profileId, "userId", userId));
 
             profile = jdbcTemplate.queryForMap("""
-                    select id, headline, bio, location, school_id, avatar_config, avatar_url, public_slug, cover_banner_url, cover_banner_pos, credentials, onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked, open_to_work, social_links
+                    select id, headline, bio, location, school_id, avatar_config, avatar_url, public_slug, cover_banner_url, cover_banner_pos, credentials, onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked, open_to_work, social_links, is_public, last_exported_at, export_count,
+                           published_snapshot::text as published_snapshot,
+                           case
+                               when published_snapshot is null then true
+                               when updated_at > last_exported_at + interval '2 seconds' then true
+                               else false
+                           end as has_unpublished_changes
                     from profiles where user_id = :userId
                     """, Map.of("userId", userId));
         }
@@ -331,6 +343,12 @@ public class ProfileService {
         boolean openToWork = profile.get("open_to_work") != null && (Boolean) profile.get("open_to_work");
         Map<String, Object> socialLinks = parseJsonMap(getJsonString(profile.get("social_links")));
 
+        boolean isPublic = profile.get("is_public") != null && (Boolean) profile.get("is_public");
+        boolean isExported = profile.get("published_snapshot") != null
+                && !((String) profile.get("published_snapshot")).isBlank();
+        String lastExportedAt = profile.get("last_exported_at") != null ? profile.get("last_exported_at").toString() : null;
+        boolean hasUnpublishedChanges = Boolean.TRUE.equals(profile.get("has_unpublished_changes"));
+
         return new PortfolioResponse(
                 displayName,
                 headline,
@@ -355,7 +373,11 @@ public class ProfileService {
                 themeUnlocked,
                 openToWork,
                 socialLinks,
-                legalConsentService.latestAcceptedVersion(userId)
+                legalConsentService.latestAcceptedVersion(userId),
+                isPublic,
+                isExported,
+                lastExportedAt,
+                hasUnpublishedChanges
         );
     }
 
@@ -498,6 +520,42 @@ public class ProfileService {
     }
 
     public PublicPortfolioResponse getPortfolioByUserId(UUID userId) {
+        Map<String, Object> profile;
+        try {
+            profile = jdbcTemplate.queryForMap("""
+                    select id, headline, bio, location, school_id, avatar_config, avatar_url,
+                           cover_banner_url, cover_banner_pos, credentials::text as credentials,
+                           onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked,
+                           open_to_work, social_links::text as social_links, is_public, last_exported_at, export_count,
+                           published_snapshot::text as published_snapshot
+                    from profiles where user_id = :userId
+                    """, Map.of("userId", userId));
+        } catch (EmptyResultDataAccessException e) {
+            throw new ResourceNotFoundException("Không tìm thấy hồ sơ ứng viên.");
+        }
+
+        String snapshotJson = (String) profile.get("published_snapshot");
+        if (snapshotJson != null && !snapshotJson.isBlank()) {
+            try {
+                PublicPortfolioResponse snapshot = objectMapper.readValue(snapshotJson, PublicPortfolioResponse.class);
+                return new PublicPortfolioResponse(
+                        snapshot.name(), snapshot.headline(), snapshot.school(), snapshot.location(), snapshot.bio(),
+                        snapshot.skills(), snapshot.skillDetails(), snapshot.avatar(), snapshot.avatarUrl(),
+                        snapshot.coverBannerUrl(), snapshot.coverBannerPos(), snapshot.experiences(), snapshot.credentials(),
+                        snapshot.reputationScore(), snapshot.totalExp(), snapshot.currentLevel(),
+                        snapshot.selectedTheme(), snapshot.themeUnlocked(), snapshot.openToWork(), snapshot.socialLinks(),
+                        snapshot.isPremium(), true, snapshot.publishedAt()
+                );
+            } catch (Exception e) {
+                log.error("Failed to parse published_snapshot for user {}: {}", userId, e.getMessage());
+            }
+        }
+
+        // Nếu chưa có published_snapshot -> website chưa được xuất bản chính thức (isExported = false)
+        return buildPublicPortfolioFromRow(userId, profile, false);
+    }
+
+    private PublicPortfolioResponse buildPublicPortfolioFromRow(UUID userId, Map<String, Object> profile, boolean isExported) {
         Map<String, Object> userRow;
         try {
             // Public view: never read the wallet — npBalance is private.
@@ -511,41 +569,6 @@ public class ProfileService {
         }
 
         String displayName = (String) userRow.get("display_name");
-
-        Map<String, Object> profile;
-        try {
-            profile = jdbcTemplate.queryForMap("""
-                    select id, headline, bio, location, school_id, avatar_config, avatar_url,
-                           cover_banner_url, cover_banner_pos, credentials::text as credentials,
-                           onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked,
-                           open_to_work, social_links::text as social_links, is_public
-                    from profiles where user_id = :userId
-                    """, Map.of("userId", userId));
-        } catch (EmptyResultDataAccessException e) {
-            throw new ResourceNotFoundException("Không tìm thấy hồ sơ ứng viên.");
-        }
-
-        boolean isPublic = profile.get("is_public") == null || (Boolean) profile.get("is_public");
-        if (!isPublic) {
-            // Private portfolio: the share link is otherwise unauthenticated
-            // (permitAll), so only let it through for the owner previewing
-            // their own link, or a business/admin who legitimately needs to
-            // review this candidate (e.g. an applicant) regardless of the
-            // public-sharing toggle.
-            boolean allowed = currentUserService.tryGetCurrentUser()
-                    .map(me -> me.appUserId().equals(userId)
-                            || me.roles().contains("admin")
-                            || me.roles().contains("employer_free")
-                            || me.roles().contains("employer_premium")
-                            || me.roles().contains("organizer"))
-                    .orElse(false);
-            if (!allowed) {
-                throw new com.nextplease.backend.exception.AppException(
-                        org.springframework.http.HttpStatus.FORBIDDEN,
-                        "Portfolio này đang được đặt ở chế độ riêng tư.");
-            }
-        }
-
         UUID profileId = (UUID) profile.get("id");
         String headline = (String) profile.get("headline");
         String bio = (String) profile.get("bio");
@@ -587,19 +610,7 @@ public class ProfileService {
                         rs.getString("proficiency_level")
                 ));
 
-        /* Trang công khai hiện cả mục ĐANG CHỜ DUYỆT, không chỉ mục đã duyệt.
-           Chỉ hiện mục đã duyệt nghe thì an toàn, nhưng hệ quả là một hồ sơ
-           mới tinh ra trang công khai HOÀN TOÀN TRỐNG phần portfolio — đúng
-           thứ người dùng gửi đi cho nhà tuyển dụng xem. Một portfolio rỗng
-           thì vô dụng, và chủ hồ sơ không hiểu vì sao.
-
-           Thứ cần giữ kín không phải bản thân lời khai, mà là việc hệ thống
-           có ĐỨNG RA BẢO CHỨNG cho nó hay không — và điều đó nằm ở cờ
-           `verified` bên dưới, chỉ bật khi APPROVED, để giao diện gắn huy
-           hiệu "Xác thực". Mục chờ duyệt hiện ra nhưng không có huy hiệu.
-
-           REJECTED và NEEDS_MORE_EVIDENCE vẫn bị giấu: đó là hai trường hợp
-           người duyệt đã xem và không chấp nhận, khác hẳn với chưa ai xem. */
+        /* Trang công khai hiện cả mục ĐANG CHỜ DUYỆT, không chỉ mục đã duyệt. */
         List<ExperienceDto> experiences = jdbcTemplate.query("""
                 select id, project_name, position, description, started_at, ended_at, proof_images::text as proof_images,
                        category, role_level, proof_link, verification_status from experiences
@@ -630,9 +641,7 @@ public class ProfileService {
         boolean openToWork = profile.get("open_to_work") != null && (Boolean) profile.get("open_to_work");
         Map<String, Object> socialLinks = parseJsonMap(getJsonString(profile.get("social_links")));
 
-        /* Premium nằm ở app_users chứ không phải profiles, nên phải truy vấn
-           riêng. Hỏng thì coi như không có Premium: một huy hiệu thiếu còn hơn
-           cả trang hồ sơ công khai chết vì một truy vấn phụ. */
+        /* Premium nằm ở app_users chứ không phải profiles, nên phải truy vấn riêng. */
         boolean isPremium = false;
         try {
             Boolean p = jdbcTemplate.queryForObject(
@@ -643,6 +652,8 @@ public class ProfileService {
             log.warn("Không đọc được premium_until của {}: {}", userId, e.getMessage());
         }
 
+        String publishedAt = profile.get("last_exported_at") != null ? profile.get("last_exported_at").toString() : null;
+
         return new PublicPortfolioResponse(
                 displayName, headline, schoolName, location, bio,
                 skills, skillDetails, avatarConfig,
@@ -652,7 +663,8 @@ public class ProfileService {
                 experiences, credentials,
                 reputationScore, totalExp, currentLevel,
                 selectedTheme, themeUnlocked,
-                openToWork, socialLinks, isPremium
+                openToWork, socialLinks, isPremium,
+                isExported, publishedAt
         );
     }
 
@@ -1142,6 +1154,129 @@ public class ProfileService {
         return Map.of();
     }
 
+    /**
+     * Deducts portfolio_export_fee_np (1,000 NP / Điểm) from candidate's wallet,
+     * updates last_exported_at, increments export_count, ensures is_public = true,
+     * and returns the public portfolio website URL.
+     */
+    @Transactional
+    public Map<String, Object> exportPortfolioWebsite() {
+        UUID userId = currentUserService.getCurrentUser().appUserId();
+        int fee = configService.getInt("portfolio_export_fee_np", 1000);
 
+        // Lock wallet
+        Map<String, Object> wallet;
+        try {
+            wallet = jdbcTemplate.queryForMap(
+                    "select id, np_balance from wallets where user_id = :userId for update",
+                    Map.of("userId", userId));
+        } catch (EmptyResultDataAccessException e) {
+            throw new AppException(HttpStatus.NOT_FOUND, "Không tìm thấy ví của bạn.");
+        }
+
+        int currentBalance = ((Number) wallet.get("np_balance")).intValue();
+        if (currentBalance < fee) {
+            throw new AppException(HttpStatus.PAYMENT_REQUIRED,
+                    String.format("Số dư Điểm không đủ để xuất website. Cần %,d Điểm, hiện tại bạn có %,d Điểm. Vui lòng nạp thêm.", fee, currentBalance),
+                    "INSUFFICIENT_NP");
+        }
+
+        Integer previousExportCount = null;
+        try {
+            previousExportCount = jdbcTemplate.queryForObject(
+                    "select export_count from profiles where user_id = :userId",
+                    Map.of("userId", userId), Integer.class);
+        } catch (Exception ignored) {}
+        boolean isUpdate = previousExportCount != null && previousExportCount > 0;
+        String reason = isUpdate
+                ? "Phí cập nhật Portfolio lên website công khai"
+                : "Phí xuất bản Portfolio thành website công khai";
+
+        int balanceAfter = currentBalance - fee;
+        UUID walletId = (UUID) wallet.get("id");
+
+        jdbcTemplate.update("""
+                update wallets
+                set np_balance = :balanceAfter, updated_at = now()
+                where id = :walletId
+                """, Map.of("balanceAfter", balanceAfter, "walletId", walletId));
+
+        jdbcTemplate.update("""
+                insert into wallet_transactions (
+                    wallet_id, amount_np, balance_after_np, transaction_type, reason
+                ) values (
+                    :walletId, :amount, :balanceAfter, 'PORTFOLIO_EXPORT_FEE', :reason
+                )
+                """, Map.of(
+                "walletId", walletId,
+                "amount", -fee,
+                "balanceAfter", balanceAfter,
+                "reason", reason
+        ));
+
+        // Compile snapshot from current profile data
+        Map<String, Object> profileRow = jdbcTemplate.queryForMap("""
+                select id, headline, bio, location, school_id, avatar_config, avatar_url,
+                       cover_banner_url, cover_banner_pos, credentials::text as credentials,
+                       onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked,
+                       open_to_work, social_links::text as social_links, is_public, last_exported_at, export_count
+                from profiles where user_id = :userId
+                """, Map.of("userId", userId));
+
+        PublicPortfolioResponse snapshot = buildPublicPortfolioFromRow(userId, profileRow, true);
+        String snapshotJson;
+        try {
+            snapshotJson = objectMapper.writeValueAsString(snapshot);
+        } catch (Exception e) {
+            log.error("Failed to serialize portfolio snapshot for user {}: {}", userId, e.getMessage());
+            throw new AppException(HttpStatus.INTERNAL_SERVER_ERROR, "Không thể đóng gói bản xuất bản portfolio.");
+        }
+
+        // Update profile
+        jdbcTemplate.update("""
+                update profiles
+                set is_public = true,
+                    last_exported_at = now(),
+                    export_count = coalesce(export_count, 0) + 1,
+                    published_snapshot = cast(:snapshotJson as jsonb),
+                    updated_at = now()
+                where user_id = :userId
+                """, Map.of("userId", userId, "snapshotJson", snapshotJson));
+
+        // Get public slug or user id
+        String publicSlug = null;
+        try {
+            publicSlug = jdbcTemplate.queryForObject(
+                    "select public_slug from profiles where user_id = :userId",
+                    Map.of("userId", userId), String.class);
+        } catch (Exception ignored) {}
+
+        if (publicSlug == null || publicSlug.isBlank()) {
+            String displayName = null;
+            try {
+                displayName = jdbcTemplate.queryForObject(
+                        "select display_name from app_users where id = :userId",
+                        Map.of("userId", userId), String.class);
+            } catch (Exception ignored) {}
+            publicSlug = ensurePublicSlug(userId, null, displayName != null ? displayName : "ung-vien");
+        }
+
+        String publicUrl = publicSlug != null && !publicSlug.isBlank()
+                ? "/p/" + publicSlug
+                : "/portfolio/view/" + userId;
+
+        log.info("[ProfileService] User {} exported portfolio website (fee={}, isUpdate={}, url={})", userId, fee, isUpdate, publicUrl);
+
+        return Map.of(
+                "success", true,
+                "feeDeducted", fee,
+                "balanceAfter", balanceAfter,
+                "publicUrl", publicUrl,
+                "publicSlug", publicSlug != null ? publicSlug : "",
+                "exportedAt", java.time.OffsetDateTime.now().toString(),
+                "isUpdate", isUpdate,
+                "message", isUpdate ? "Cập nhật website portfolio thành công!" : "Xuất bản website portfolio thành công!"
+        );
+    }
 }
 

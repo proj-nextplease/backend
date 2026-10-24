@@ -92,18 +92,7 @@ public class ApplicationService {
             );
         }
 
-        // 4. Premium gate
-        Boolean requiresPremium = (Boolean) job.get("requires_premium");
-        if (Boolean.TRUE.equals(requiresPremium)) {
-            boolean hasPremium = checkPremium(userId);
-            if (!hasPremium) {
-                throw new AppException(
-                        HttpStatus.PAYMENT_REQUIRED,
-                        "Cơ hội này yêu cầu Premium Pass. Nâng cấp để ứng tuyển không giới hạn.",
-                        "PREMIUM_REQUIRED"
-                );
-            }
-        }
+        // 4. (Deprecated) Premium gate removed per new point-based model
 
         // 5. Snapshot eligibility at time of application
         String snapshot = buildSnapshot(myRs, candidate);
@@ -260,7 +249,7 @@ public class ApplicationService {
      */
     @Transactional
     public void updateApplicationStatus(UUID applicationId, UUID organizerUserId, String newStatus, String rejectReason) {
-        List<String> allowed = List.of("VIEWED", "SHORTLISTED", "ACCEPTED", "REJECTED", "COMPLETED");
+        List<String> allowed = List.of("VIEWED", "SHORTLISTED", "OFFERED", "ACCEPTED", "REJECTED", "COMPLETED");
         if (!allowed.contains(newStatus)) {
             throw new AppException(HttpStatus.BAD_REQUEST, "Trạng thái không hợp lệ: " + newStatus);
         }
@@ -269,7 +258,7 @@ public class ApplicationService {
         Map<String, Object> appInfo;
         try {
             appInfo = jdbcTemplate.queryForMap("""
-                    select a.id, a.candidate_id, a.status, a.job_id, j.job_type, j.title as job_title, j.capacity from applications a
+                    select a.id, a.candidate_id, a.status, a.job_id, j.job_type, j.title as job_title, j.capacity, c.name as company_name from applications a
                     join jobs j on j.id = a.job_id
                     join companies c on c.id = j.company_id
                     where a.id = :appId
@@ -347,22 +336,46 @@ public class ApplicationService {
         // Notify the candidate about the status change.
         UUID candidateUserId = (UUID) appInfo.get("candidate_id");
         String jobTitle = (String) appInfo.get("job_title");
+        String companyName = (String) appInfo.get("company_name");
         UUID jobId = (UUID) appInfo.get("job_id");
-        String statusLabel = switch (newStatus) {
-            case "VIEWED" -> "đã được xem";
-            case "SHORTLISTED" -> "đã vào danh sách tiềm năng";
-            case "ACCEPTED" -> "đã được chấp nhận 🎉";
-            case "REJECTED" -> "đã bị từ chối";
-            case "COMPLETED" -> "đã hoàn thành — bạn được cộng điểm!";
-            default -> "đã được cập nhật";
-        };
-        boolean emailWorthy = newStatus.equals("ACCEPTED") || newStatus.equals("REJECTED") || newStatus.equals("COMPLETED");
+
+        String notifTitle;
+        String notifBody;
+        String notifLink;
+
+        if ("OFFERED".equals(newStatus)) {
+            notifTitle = "🎉 Lời mời nhận việc: " + jobTitle;
+            notifBody = (companyName != null ? companyName : "Nhà tuyển dụng")
+                    + " đã gửi lời mời nhận việc cho vị trí \"" + jobTitle + "\". Hãy vào Fonlio để kiểm tra và xác nhận nhận việc!";
+            notifLink = "/candidates/dashboard/applications";
+        } else if ("ACCEPTED".equals(newStatus)) {
+            notifTitle = "🎉 Đơn ứng tuyển đã được chấp nhận!";
+            notifBody = "Đơn ứng tuyển \"" + jobTitle + "\" của bạn tại "
+                    + (companyName != null ? companyName : "doanh nghiệp") + " đã được chấp nhận.";
+            notifLink = "/candidates/dashboard/applications";
+        } else if ("REJECTED".equals(newStatus)) {
+            notifTitle = "Cập nhật đơn ứng tuyển: " + jobTitle;
+            notifBody = "Đơn ứng tuyển \"" + jobTitle + "\" của bạn đã bị từ chối"
+                    + (rejectReason != null && !rejectReason.isBlank() ? " (Lý do: " + rejectReason + ")" : "");
+            notifLink = "/candidates/dashboard/applications";
+        } else if ("COMPLETED".equals(newStatus)) {
+            notifTitle = "Hoàn thành công việc: " + jobTitle;
+            notifBody = "Đơn ứng tuyển \"" + jobTitle + "\" của bạn đã hoàn thành — bạn được cộng điểm!";
+            notifLink = "/candidates/dashboard/applications";
+        } else {
+            notifTitle = "Cập nhật đơn ứng tuyển";
+            String statusLabel = switch (newStatus) {
+                case "VIEWED" -> "đã được xem";
+                case "SHORTLISTED" -> "đã vào danh sách tiềm năng";
+                default -> "đã được cập nhật";
+            };
+            notifBody = "Đơn ứng tuyển \"" + jobTitle + "\" của bạn " + statusLabel;
+            notifLink = jobId != null ? "/jobs/" + jobId : "/candidates/dashboard/applications";
+        }
+
+        boolean emailWorthy = newStatus.equals("OFFERED") || newStatus.equals("ACCEPTED") || newStatus.equals("REJECTED") || newStatus.equals("COMPLETED");
         notificationService.notify(candidateUserId, "APPLICATION_STATUS",
-                "Cập nhật đơn ứng tuyển",
-                "Đơn ứng tuyển \"" + jobTitle + "\" của bạn " + statusLabel
-                        + ("REJECTED".equals(newStatus) && rejectReason != null && !rejectReason.isBlank() ? " (Lý do: " + rejectReason + ")" : ""),
-                jobId != null ? "/jobs/" + jobId : null,
-                emailWorthy);
+                notifTitle, notifBody, notifLink, emailWorthy);
     }
 
     /** Returns all applications for the given candidate, newest first. */
@@ -399,7 +412,7 @@ public class ApplicationService {
                 join companies c on c.id = j.company_id
                 left join ratings r on r.application_id = a.id
                 where a.candidate_id = :userId
-                order by a.applied_at desc
+                order by case when a.status = 'OFFERED' then 0 when a.status = 'SHORTLISTED' then 1 else 2 end, a.updated_at desc, a.applied_at desc
                 """, Map.of("userId", userId));
     }
 
@@ -427,6 +440,197 @@ public class ApplicationService {
                 """, Map.of("id", applicationId));
         recordHistory(applicationId, "WITHDRAWN");
         log.info("[ApplicationService] Candidate {} withdrew application {}", userId, applicationId);
+    }
+
+    /**
+     * Candidate accepts an employer's job offer.
+     * If the job has compensation > 0, deducts paid_job_acceptance_fee_np (19,000 NP).
+     * If unpaid/volunteer, deducts 0 NP.
+     * Transitions status: OFFERED -> ACCEPTED.
+     */
+    @Transactional
+    public Map<String, Object> acceptOffer(UUID userId, UUID applicationId) {
+        Map<String, Object> app;
+        try {
+            app = jdbcTemplate.queryForMap("""
+                    select a.id, a.candidate_id, a.status, a.job_id,
+                           j.title as job_title, j.compensation, j.company_id, c.name as company_name
+                    from applications a
+                    join jobs j on j.id = a.job_id
+                    join companies c on c.id = j.company_id
+                    where a.id = :appId and a.candidate_id = :userId
+                    """, Map.of("appId", applicationId, "userId", userId));
+        } catch (org.springframework.dao.EmptyResultDataAccessException e) {
+            throw new AppException(HttpStatus.NOT_FOUND, "Không tìm thấy đơn ứng tuyển.");
+        }
+
+        String currentStatus = (String) app.get("status");
+        if (!"OFFERED".equals(currentStatus)) {
+            throw new AppException(HttpStatus.CONFLICT,
+                    "Chỉ có thể xác nhận nhận việc khi đơn đang ở trạng thái 'Được mời nhận việc' (hiện tại: " + currentStatus + ").");
+        }
+
+        Object compRaw = app.get("compensation");
+        boolean isPaidJob = false;
+        if (compRaw instanceof Number n) {
+            isPaidJob = n.doubleValue() > 0;
+        }
+
+        int fee = 0;
+        int balanceAfter = 0;
+        if (isPaidJob) {
+            fee = configService.getInt("paid_job_acceptance_fee_np", 19000);
+            // Lock candidate wallet
+            Map<String, Object> wallet;
+            try {
+                wallet = jdbcTemplate.queryForMap(
+                        "select id, np_balance from wallets where user_id = :userId for update",
+                        Map.of("userId", userId));
+            } catch (org.springframework.dao.EmptyResultDataAccessException e) {
+                throw new AppException(HttpStatus.NOT_FOUND, "Không tìm thấy ví của bạn.");
+            }
+
+            int currentBalance = ((Number) wallet.get("np_balance")).intValue();
+            if (currentBalance < fee) {
+                throw new AppException(HttpStatus.PAYMENT_REQUIRED,
+                        String.format("Số dư Điểm không đủ để xác nhận nhận việc. Cần %,d Điểm, hiện tại bạn có %,d Điểm. Vui lòng nạp thêm.", fee, currentBalance),
+                        "INSUFFICIENT_NP");
+            }
+
+            balanceAfter = currentBalance - fee;
+            UUID walletId = (UUID) wallet.get("id");
+
+            jdbcTemplate.update("""
+                    update wallets
+                    set np_balance = :balanceAfter, updated_at = now()
+                    where id = :walletId
+                    """, Map.of("balanceAfter", balanceAfter, "walletId", walletId));
+
+            jdbcTemplate.update("""
+                    insert into wallet_transactions (
+                        wallet_id, amount_np, balance_after_np, transaction_type, reason,
+                        source_type, source_id
+                    ) values (
+                        :walletId, :amount, :balanceAfter, 'JOB_ACCEPTANCE_FEE', :reason,
+                        'job_application', :applicationId
+                    )
+                    """, Map.of(
+                    "walletId", walletId,
+                    "amount", -fee,
+                    "balanceAfter", balanceAfter,
+                    "reason", "Phí xác nhận nhận việc có trả lương: " + app.get("job_title"),
+                    "applicationId", applicationId
+            ));
+        }
+
+        jdbcTemplate.update("""
+                update applications
+                set status = 'ACCEPTED', updated_at = now()
+                where id = :id
+                """, Map.of("id", applicationId));
+
+        recordHistory(applicationId, "ACCEPTED");
+
+        // Notify employer / organizers
+        UUID companyId = (UUID) app.get("company_id");
+        List<UUID> employerUserIds = jdbcTemplate.queryForList("""
+                select user_id from authority_nodes
+                where company_id = :companyId and status = 'ACTIVE' and deleted_at is null
+                """, Map.of("companyId", companyId), UUID.class);
+
+        String candidateName = null;
+        try {
+            candidateName = jdbcTemplate.queryForObject(
+                    "select coalesce(display_name, 'Ứng viên') from app_users where id = :userId",
+                    Map.of("userId", userId), String.class);
+        } catch (Exception ignored) {
+            candidateName = "Ứng viên";
+        }
+
+        for (UUID employerId : employerUserIds) {
+            notificationService.notify(employerId, "APPLICATION_STATUS",
+                    "Ứng viên đã nhận việc 🎉",
+                    "Ứng viên " + candidateName + " đã đồng ý nhận việc cho vị trí \"" + app.get("job_title") + "\"!",
+                    "/business/jobs/" + app.get("job_id"),
+                    true);
+        }
+
+        log.info("[ApplicationService] Candidate {} accepted offer for app {} (fee={}, paid={})", userId, applicationId, fee, isPaidJob);
+
+        return Map.of(
+                "status", "ACCEPTED",
+                "feeDeducted", fee,
+                "message", "Bạn đã đồng ý nhận việc thành công!"
+        );
+    }
+
+    /**
+     * Candidate declines an employer's job offer.
+     * No points deducted.
+     * Transitions status: OFFERED -> OFFER_DECLINED.
+     */
+    @Transactional
+    public Map<String, Object> declineOffer(UUID userId, UUID applicationId, String reason) {
+        Map<String, Object> app;
+        try {
+            app = jdbcTemplate.queryForMap("""
+                    select a.id, a.candidate_id, a.status, a.job_id,
+                           j.title as job_title, j.company_id
+                    from applications a
+                    join jobs j on j.id = a.job_id
+                    where a.id = :appId and a.candidate_id = :userId
+                    """, Map.of("appId", applicationId, "userId", userId));
+        } catch (org.springframework.dao.EmptyResultDataAccessException e) {
+            throw new AppException(HttpStatus.NOT_FOUND, "Không tìm thấy đơn ứng tuyển.");
+        }
+
+        String currentStatus = (String) app.get("status");
+        if (!"OFFERED".equals(currentStatus)) {
+            throw new AppException(HttpStatus.CONFLICT,
+                    "Chỉ có thể từ chối khi đơn đang ở trạng thái 'Được mời nhận việc'.");
+        }
+
+        jdbcTemplate.update("""
+                update applications
+                set status = 'OFFER_DECLINED',
+                    reject_reason = :reason,
+                    updated_at = now()
+                where id = :id
+                """, Map.of("id", applicationId, "reason", reason != null ? reason : "Ứng viên từ chối nhận việc"));
+
+        recordHistory(applicationId, "OFFER_DECLINED");
+
+        // Notify employer
+        UUID companyId = (UUID) app.get("company_id");
+        List<UUID> employerUserIds = jdbcTemplate.queryForList("""
+                select user_id from authority_nodes
+                where company_id = :companyId and status = 'ACTIVE' and deleted_at is null
+                """, Map.of("companyId", companyId), UUID.class);
+
+        String candidateName = null;
+        try {
+            candidateName = jdbcTemplate.queryForObject(
+                    "select coalesce(display_name, 'Ứng viên') from app_users where id = :userId",
+                    Map.of("userId", userId), String.class);
+        } catch (Exception ignored) {
+            candidateName = "Ứng viên";
+        }
+
+        for (UUID employerId : employerUserIds) {
+            notificationService.notify(employerId, "APPLICATION_STATUS",
+                    "Ứng viên từ chối lời mời",
+                    "Ứng viên " + candidateName + " đã từ chối nhận việc cho vị trí \"" + app.get("job_title") + "\"."
+                            + (reason != null && !reason.isBlank() ? " (Lý do: " + reason + ")" : ""),
+                    "/business/jobs/" + app.get("job_id"),
+                    false);
+        }
+
+        log.info("[ApplicationService] Candidate {} declined offer for app {}", userId, applicationId);
+
+        return Map.of(
+                "status", "OFFER_DECLINED",
+                "message", "Bạn đã từ chối lời mời nhận việc."
+        );
     }
 
     // ── private helpers ──────────────────────────────────────────────────────

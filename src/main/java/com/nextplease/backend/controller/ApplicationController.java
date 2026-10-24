@@ -83,6 +83,27 @@ public class ApplicationController {
         return ApiResponse.success("Đã rút đơn ứng tuyển.");
     }
 
+    /** POST /api/v1/me/applications/{id}/accept-offer — candidate accepts job offer */
+    @PostMapping("/me/applications/{id}/accept-offer")
+    public ApiResponse<Map<String, Object>> acceptOffer(@PathVariable UUID id) {
+        UUID userId = currentUserService.getCurrentUser().appUserId();
+        Map<String, Object> result = applicationService.acceptOffer(userId, id);
+        return ApiResponse.success(result);
+    }
+
+    /** POST /api/v1/me/applications/{id}/decline-offer — candidate declines job offer */
+    @PostMapping("/me/applications/{id}/decline-offer")
+    public ApiResponse<Map<String, Object>> declineOffer(
+            @PathVariable UUID id,
+            @RequestBody(required = false) DeclineOfferRequest body
+    ) {
+        UUID userId = currentUserService.getCurrentUser().appUserId();
+        String reason = body != null ? body.reason() : null;
+        Map<String, Object> result = applicationService.declineOffer(userId, id, reason);
+        return ApiResponse.success(result);
+    }
+
     record ApplyRequest(@Size(max = 1000) String coverNote, Map<String, String> answers) {}
     record StatusUpdateRequest(String status, String rejectReason) {}
+    record DeclineOfferRequest(@Size(max = 500) String reason) {}
 }

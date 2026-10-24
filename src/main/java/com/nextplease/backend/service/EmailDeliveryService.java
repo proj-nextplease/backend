@@ -186,7 +186,12 @@ public class EmailDeliveryService {
      * optionalLink, when present, renders a button.
      */
     public void sendNotificationEmail(String recipientEmail, String displayName, String title, String body, String link) {
-        if (!isEnabled() || recipientEmail == null || recipientEmail.isBlank()) {
+        if (recipientEmail == null || recipientEmail.isBlank()) {
+            return;
+        }
+        if (!isEnabled()) {
+            log.info("[EmailDeliveryService MOCK] Email notification triggered: To={}, Title={}, Body={}, Link={}",
+                    recipientEmail, title, body, link);
             return;
         }
         try {
