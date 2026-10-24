@@ -239,8 +239,9 @@ public class ProfileService {
         try {
             profile = jdbcTemplate.queryForMap("""
                     select id, headline, bio, location, school_id, avatar_config, avatar_url, public_slug, cover_banner_url, cover_banner_pos, credentials, onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked, open_to_work, social_links, is_public, last_exported_at, export_count,
+                           published_snapshot::text as published_snapshot,
                            case
-                               when last_exported_at is null then true
+                               when published_snapshot is null then true
                                when updated_at > last_exported_at + interval '2 seconds' then true
                                else false
                            end as has_unpublished_changes
@@ -256,8 +257,9 @@ public class ProfileService {
 
             profile = jdbcTemplate.queryForMap("""
                     select id, headline, bio, location, school_id, avatar_config, avatar_url, public_slug, cover_banner_url, cover_banner_pos, credentials, onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked, open_to_work, social_links, is_public, last_exported_at, export_count,
+                           published_snapshot::text as published_snapshot,
                            case
-                               when last_exported_at is null then true
+                               when published_snapshot is null then true
                                when updated_at > last_exported_at + interval '2 seconds' then true
                                else false
                            end as has_unpublished_changes
@@ -342,8 +344,8 @@ public class ProfileService {
         Map<String, Object> socialLinks = parseJsonMap(getJsonString(profile.get("social_links")));
 
         boolean isPublic = profile.get("is_public") != null && (Boolean) profile.get("is_public");
-        boolean isExported = profile.get("last_exported_at") != null
-                || (profile.get("export_count") != null && ((Number) profile.get("export_count")).intValue() > 0);
+        boolean isExported = profile.get("published_snapshot") != null
+                && !((String) profile.get("published_snapshot")).isBlank();
         String lastExportedAt = profile.get("last_exported_at") != null ? profile.get("last_exported_at").toString() : null;
         boolean hasUnpublishedChanges = Boolean.TRUE.equals(profile.get("has_unpublished_changes"));
 
@@ -549,10 +551,8 @@ public class ProfileService {
             }
         }
 
-        boolean isExported = profile.get("last_exported_at") != null
-                || (profile.get("export_count") != null && ((Number) profile.get("export_count")).intValue() > 0);
-
-        return buildPublicPortfolioFromRow(userId, profile, isExported);
+        // Nếu chưa có published_snapshot -> website chưa được xuất bản chính thức (isExported = false)
+        return buildPublicPortfolioFromRow(userId, profile, false);
     }
 
     private PublicPortfolioResponse buildPublicPortfolioFromRow(UUID userId, Map<String, Object> profile, boolean isExported) {
