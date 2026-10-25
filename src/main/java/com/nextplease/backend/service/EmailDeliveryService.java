@@ -42,8 +42,8 @@ public class EmailDeliveryService {
 
     public EmailDeliveryService(
             @Value("${app.mail.enabled:false}") boolean enabled,
-            @Value("${app.mail.from-address:no-reply@nextplease.vn}") String fromAddress,
-            @Value("${app.mail.from-name:nextplease}") String fromName,
+            @Value("${app.mail.from-address:no-reply@fonlio.vn}") String fromAddress,
+            @Value("${app.mail.from-name:Fonlio}") String fromName,
             @Value("${app.mail.brevo-api-key:}") String brevoApiKey,
             @Autowired(required = false) JavaMailSender javaMailSender,
             @Autowired(required = false) NamedParameterJdbcTemplate jdbcTemplate,
@@ -93,7 +93,7 @@ public class EmailDeliveryService {
             return;
         }
 
-        String subject = "Mã OTP xác thực ứng viên nextplease";
+        String subject = "Mã OTP xác thực tài khoản Fonlio";
         String textContent = buildCandidateOtpText(displayName, otp, expiresAt);
         String htmlContent = buildCandidateOtpHtml(displayName, otp, expiresAt);
 
@@ -136,7 +136,7 @@ public class EmailDeliveryService {
             return;
         }
 
-        String subject = "Lời mời tham gia " + companyName + " trên nextplease";
+        String subject = "Lời mời tham gia " + companyName + " trên Fonlio";
         String safeCompany = escapeHtml(companyName);
         String safeRole = escapeHtml(roleLabel);
         String safeUrl = escapeHtml(inviteUrl);
@@ -145,14 +145,14 @@ public class EmailDeliveryService {
         String textContent = """
                 Xin chào,
 
-                Bạn được mời tham gia tổ chức "%s" trên nextplease với vai trò %s.
+                Bạn được mời tham gia tổ chức "%s" trên Fonlio với vai trò %s.
 
                 Nhấn vào liên kết sau để chấp nhận lời mời (đăng nhập hoặc đăng ký bằng chính email này):
                 %s
 
                 Lời mời có hiệu lực đến %s (giờ Việt Nam).
 
-                nextplease
+                Fonlio
                 """.formatted(companyName, roleLabel, inviteUrl, VIETNAM_TIME_FORMATTER.format(expiresAt));
 
         String htmlContent = """
@@ -163,7 +163,7 @@ public class EmailDeliveryService {
                       <tr><td align="center">
                         <table role="presentation" width="100%%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#ffffff;border-radius:28px;overflow:hidden;border:1px solid #dfe7fb;">
                           <tr><td style="padding:34px 34px 20px;background:linear-gradient(135deg,#2563eb,#ff7a1a);color:#ffffff;">
-                            <div style="font-size:14px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;">nextplease</div>
+                            <div style="font-size:14px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;">FONLIO</div>
                             <h1 style="margin:18px 0 10px;font-size:28px;line-height:1.2;">Lời mời tham gia tổ chức</h1>
                           </td></tr>
                           <tr><td style="padding:34px;">
@@ -225,7 +225,7 @@ public class EmailDeliveryService {
 
         String safeTemplate = templateCode != null && !templateCode.isBlank() ? templateCode : "NOTIFICATION";
         String safeName = escapeHtml(normalizeDisplayName(displayName));
-        String safeTitle = escapeHtml(title == null ? "Thông báo từ Fonlio / nextplease" : title);
+        String safeTitle = escapeHtml(title == null ? "Thông báo từ Fonlio" : title);
         String safeBody = escapeHtml(body == null ? "" : body).replace("\n", "<br/>");
         String button = (link == null || link.isBlank()) ? "" :
                 "<div style=\"text-align:center;margin-top:28px;\"><a href=\"" + escapeHtml(link)
@@ -244,7 +244,7 @@ public class EmailDeliveryService {
                         <table role="presentation" width="100%%" cellspacing="0" cellpadding="0" style="max-width:580px;background:#ffffff;border-radius:24px;overflow:hidden;border:1px solid #e5e7eb;box-shadow:0 12px 36px rgba(0,0,0,0.06);">
                           <tr>
                             <td style="padding:32px 36px 24px;background:linear-gradient(135deg,#1d4ed8 0%%,#2563eb 50%%,#f97316 100%%);color:#ffffff;">
-                              <div style="font-size:13px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:#dbeafe;">FONLIO · NEXTPLEASE</div>
+                              <div style="font-size:13px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:#dbeafe;">FONLIO</div>
                               <h1 style="margin:12px 0 0;font-size:24px;font-weight:800;line-height:1.3;color:#ffffff;">%s</h1>
                             </td>
                           </tr>
@@ -257,7 +257,7 @@ public class EmailDeliveryService {
                           </tr>
                           <tr>
                             <td style="padding:20px 36px;background:#f9fafb;border-top:1px solid #f3f4f6;color:#6b7280;font-size:12px;line-height:1.6;">
-                              Email này được gửi tự động từ nền tảng <strong>Fonlio / nextplease</strong>.<br>
+                              Email này được gửi tự động từ nền tảng <strong>Fonlio</strong>.<br>
                               Vui lòng không trả lời trực tiếp email này.
                             </td>
                           </tr>
@@ -272,7 +272,7 @@ public class EmailDeliveryService {
                 + "Xin chào " + normalizeDisplayName(displayName) + ",\n\n"
                 + (body == null ? "" : body)
                 + (link == null || link.isBlank() ? "" : "\n\nXem chi tiết tại: " + link)
-                + "\n\n--\nFonlio / nextplease";
+                + "\n\n--\nFonlio";
 
         if (!isEnabled()) {
             log.info("[EmailDeliveryService MOCK] Notification Email -> to={}, subject='{}', body='{}', link={}",
@@ -287,7 +287,7 @@ public class EmailDeliveryService {
                 Map<String, Object> requestBody = Map.of(
                         "sender", Map.of("name", fromName, "email", fromAddress),
                         "to", List.of(Map.of("email", recipientEmail, "name", normalizeDisplayName(displayName))),
-                        "subject", title == null ? "Thông báo từ Fonlio / nextplease" : title,
+                        "subject", title == null ? "Thông báo từ Fonlio" : title,
                         "htmlContent", htmlContent,
                         "textContent", textContent
                 );
@@ -312,7 +312,7 @@ public class EmailDeliveryService {
                 MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true, "UTF-8");
                 helper.setFrom(new InternetAddress(fromAddress, fromName));
                 helper.setTo(recipientEmail);
-                helper.setSubject(title == null ? "Thông báo từ Fonlio / nextplease" : title);
+                helper.setSubject(title == null ? "Thông báo từ Fonlio" : title);
                 helper.setText(textContent, htmlContent);
                 javaMailSender.send(mimeMessage);
                 log.info("[EmailDeliveryService] Sent notification email to={} via SMTP", recipientEmail);
@@ -357,11 +357,11 @@ public class EmailDeliveryService {
         return """
                 Chào %s,
 
-                Mã OTP xác thực tài khoản ứng viên nextplease của bạn là: %s
+                Mã OTP xác thực tài khoản ứng viên Fonlio của bạn là: %s
 
                 Mã này có hiệu lực đến %s (giờ Việt Nam). Nếu bạn không yêu cầu mã này, bạn có thể bỏ qua email.
 
-                nextplease
+                Fonlio
                 """.formatted(safeName, otp, VIETNAM_TIME_FORMATTER.format(expiresAt));
     }
 
@@ -376,7 +376,7 @@ public class EmailDeliveryService {
                   <head>
                     <meta charset="utf-8">
                     <meta name="viewport" content="width=device-width, initial-scale=1">
-                    <title>Mã OTP nextplease</title>
+                    <title>Mã OTP Fonlio</title>
                   </head>
                   <body style="margin:0;background:#f4f7ff;font-family:Arial,Helvetica,sans-serif;color:#111827;">
                     <table role="presentation" width="100%%" cellspacing="0" cellpadding="0" style="background:#f4f7ff;padding:32px 16px;">
@@ -385,7 +385,7 @@ public class EmailDeliveryService {
                           <table role="presentation" width="100%%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#ffffff;border-radius:28px;overflow:hidden;border:1px solid #dfe7fb;box-shadow:0 24px 70px rgba(37,99,235,0.14);">
                             <tr>
                               <td style="padding:34px 34px 20px;background:linear-gradient(135deg,#2563eb,#ff7a1a);color:#ffffff;">
-                                <div style="font-size:14px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;">nextplease</div>
+                                <div style="font-size:14px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;">FONLIO</div>
                                 <h1 style="margin:18px 0 10px;font-size:30px;line-height:1.18;">Xác thực tài khoản ứng viên</h1>
                                 <p style="margin:0;font-size:16px;line-height:1.6;color:#eef4ff;">Chỉ còn một bước nhỏ để mở Portfolio 3D và bắt đầu gom proof thật cho hành trình của bạn.</p>
                               </td>
@@ -404,7 +404,7 @@ public class EmailDeliveryService {
                             </tr>
                             <tr>
                               <td style="padding:22px 34px;background:#f8fbff;border-top:1px solid #e5edff;color:#6b7280;font-size:13px;line-height:1.6;">
-                                nextplease biến trải nghiệm sinh viên thành hồ sơ ứng viên sống động.
+                                Fonlio biến trải nghiệm sinh viên thành hồ sơ ứng viên sống động.
                               </td>
                             </tr>
                           </table>

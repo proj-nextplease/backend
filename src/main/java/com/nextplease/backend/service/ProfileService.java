@@ -249,7 +249,7 @@ public class ProfileService {
             UUID profileId = UUID.randomUUID();
             jdbcTemplate.update("""
                     insert into profiles (id, user_id, headline, visibility)
-                    values (:id, :userId, 'Ứng viên nextplease', '{}'::jsonb)
+                    values (:id, :userId, 'Ứng viên Fonlio', '{}'::jsonb)
                     """, Map.of("id", profileId, "userId", userId));
 
             profile = jdbcTemplate.queryForMap(
@@ -763,7 +763,7 @@ public class ProfileService {
             wasOnboardingCompleted = false;
             jdbcTemplate.update("""
                     insert into profiles (id, user_id, headline, visibility)
-                    values (:id, :userId, 'Ứng viên nextplease', '{}'::jsonb)
+                    values (:id, :userId, 'Ứng viên Fonlio', '{}'::jsonb)
                     """, Map.of("id", profileId, "userId", userId));
         }
 

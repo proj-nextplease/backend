@@ -13,8 +13,8 @@ class EmailDeliveryServiceTest {
     void testSendNotificationEmailGraceful() {
         EmailDeliveryService service = new EmailDeliveryService(
                 false,
-                "no-reply@nextplease.vn",
-                "nextplease",
+                "no-reply@fonlio.vn",
+                "Fonlio",
                 "",
                 null,
                 null,
@@ -39,8 +39,8 @@ class EmailDeliveryServiceTest {
     void testBlankRecipient() {
         EmailDeliveryService service = new EmailDeliveryService(
                 true,
-                "no-reply@nextplease.vn",
-                "nextplease",
+                "no-reply@fonlio.vn",
+                "Fonlio",
                 "",
                 null,
                 null,
