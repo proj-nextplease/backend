@@ -34,4 +34,3 @@ public record PortfolioResponse(
         String legalConsentVersion
 ) {
 }
-}

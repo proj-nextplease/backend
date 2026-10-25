@@ -122,20 +122,35 @@ public class ApplicationService {
         recordHistory(applicationId, "SUBMITTED");
         log.info("[ApplicationService] User {} applied to job {} → application {}", userId, jobId, applicationId);
 
-        // Báo cho CẢ TỔ CHỨC, không chỉ người đăng tin.
-        //
-        // Cả ba vai trò OWNER/MANAGER/MEMBER đều duyệt được ứng viên. Báo
-        // riêng cho created_by nghĩa là người đó nghỉ phép hay rời tổ chức
-        // thì đơn rơi vào im lặng, trong khi ứng viên vẫn ngồi chờ.
-        //
-        // Link dẫn thẳng tới đúng tin và đúng đơn, thay vì thả người nhận ở
-        // cửa bảng điều khiển rồi để họ tự đi tìm.
-        if (job.get("company_id") instanceof UUID companyId) {
+        String jobTitle = (String) job.get("title");
+        String companyName = null;
+        UUID companyId = null;
+        if (job.get("company_id") instanceof UUID cId) {
+            companyId = cId;
+            try {
+                companyName = jdbcTemplate.queryForObject(
+                        "select name from companies where id = :cId",
+                        Map.of("cId", cId), String.class);
+            } catch (Exception ignored) {}
+        }
+        String companyDisplay = (companyName != null && !companyName.isBlank()) ? companyName : "Nhà tuyển dụng";
+
+        // 1. Gửi thông báo + email xác nhận ứng tuyển thành công cho ỨNG VIÊN
+        notificationService.notify(userId, "APPLICATION_STATUS",
+                "Ứng tuyển thành công: " + jobTitle,
+                "Bạn đã ứng tuyển thành công vào vị trí \"" + jobTitle + "\" tại " + companyDisplay
+                        + ". Hồ sơ của bạn đã được chuyển tới nhà tuyển dụng. Bạn có thể theo dõi tiến độ ứng tuyển tại mục Đơn ứng tuyển trên Fonlio.",
+                "/candidates/dashboard/applications",
+                true);
+
+        // 2. Báo cho CẢ TỔ CHỨC qua thông báo in-app và email
+        if (companyId != null) {
             notificationService.notifyCompanyMembers(companyId, userId, "NEW_APPLICATION",
-                    "Có ứng viên mới",
-                    "Một ứng viên vừa ứng tuyển vào \"" + job.get("title") + "\".",
+                    "Có ứng viên mới: " + jobTitle,
+                    "Một ứng viên vừa ứng tuyển vào vị trí \"" + jobTitle + "\". Hãy vào xem hồ sơ!",
                     "/businesses/dashboard/candidates?posting=" + jobId
-                            + "&type=JOB&app=" + applicationId);
+                            + "&type=JOB&app=" + applicationId,
+                    true);
         }
 
         return Map.of(
@@ -235,11 +250,11 @@ public class ApplicationService {
             recordHistory(applicationId, "VIEWED");
             UUID candidateUserId = (UUID) appInfo.get("candidate_id");
             String jobTitle = (String) appInfo.get("job_title");
-            UUID jobId = (UUID) appInfo.get("job_id");
             notificationService.notify(candidateUserId, "APPLICATION_STATUS",
-                    "Hồ sơ của bạn đã được xem",
-                    "Nhà tuyển dụng vừa xem đơn ứng tuyển \"" + jobTitle + "\" của bạn.",
-                    jobId != null ? "/jobs/" + jobId : null);
+                    "Hồ sơ của bạn đã được xem: " + jobTitle,
+                    "Nhà tuyển dụng vừa mở xem hồ sơ ứng tuyển vị trí \"" + jobTitle + "\" của bạn.",
+                    "/candidates/dashboard/applications",
+                    true);
             log.info("[ApplicationService] Application {} auto-marked VIEWED by organizer {}", applicationId, organizerUserId);
         }
     }
@@ -349,7 +364,7 @@ public class ApplicationService {
                     + " đã gửi lời mời nhận việc cho vị trí \"" + jobTitle + "\". Hãy vào Fonlio để kiểm tra và xác nhận nhận việc!";
             notifLink = "/candidates/dashboard/applications";
         } else if ("ACCEPTED".equals(newStatus)) {
-            notifTitle = "🎉 Đơn ứng tuyển đã được chấp nhận!";
+            notifTitle = "🎉 Đơn ứng tuyển đã được chấp nhận: " + jobTitle;
             notifBody = "Đơn ứng tuyển \"" + jobTitle + "\" của bạn tại "
                     + (companyName != null ? companyName : "doanh nghiệp") + " đã được chấp nhận.";
             notifLink = "/candidates/dashboard/applications";
@@ -362,20 +377,24 @@ public class ApplicationService {
             notifTitle = "Hoàn thành công việc: " + jobTitle;
             notifBody = "Đơn ứng tuyển \"" + jobTitle + "\" của bạn đã hoàn thành — bạn được cộng điểm!";
             notifLink = "/candidates/dashboard/applications";
+        } else if ("SHORTLISTED".equals(newStatus)) {
+            notifTitle = "Hồ sơ vào danh sách tiềm năng: " + jobTitle;
+            notifBody = "Đơn ứng tuyển \"" + jobTitle + "\" của bạn tại "
+                    + (companyName != null ? companyName : "doanh nghiệp") + " đã được đưa vào danh sách tiềm năng (Shortlist).";
+            notifLink = "/candidates/dashboard/applications";
+        } else if ("VIEWED".equals(newStatus)) {
+            notifTitle = "Hồ sơ của bạn đã được xem: " + jobTitle;
+            notifBody = "Nhà tuyển dụng tại " + (companyName != null ? companyName : "doanh nghiệp")
+                    + " đã xem hồ sơ ứng tuyển \"" + jobTitle + "\" của bạn.";
+            notifLink = "/candidates/dashboard/applications";
         } else {
-            notifTitle = "Cập nhật đơn ứng tuyển";
-            String statusLabel = switch (newStatus) {
-                case "VIEWED" -> "đã được xem";
-                case "SHORTLISTED" -> "đã vào danh sách tiềm năng";
-                default -> "đã được cập nhật";
-            };
-            notifBody = "Đơn ứng tuyển \"" + jobTitle + "\" của bạn " + statusLabel;
-            notifLink = jobId != null ? "/jobs/" + jobId : "/candidates/dashboard/applications";
+            notifTitle = "Cập nhật đơn ứng tuyển: " + jobTitle;
+            notifBody = "Đơn ứng tuyển \"" + jobTitle + "\" của bạn đã được cập nhật sang trạng thái: " + newStatus;
+            notifLink = "/candidates/dashboard/applications";
         }
 
-        boolean emailWorthy = newStatus.equals("OFFERED") || newStatus.equals("ACCEPTED") || newStatus.equals("REJECTED") || newStatus.equals("COMPLETED");
         notificationService.notify(candidateUserId, "APPLICATION_STATUS",
-                notifTitle, notifBody, notifLink, emailWorthy);
+                notifTitle, notifBody, notifLink, true);
     }
 
     /** Returns all applications for the given candidate, newest first. */

@@ -67,15 +67,17 @@ public class NotificationService {
         }
 
         if (sendEmail && isPreferenceEnabled(userId, "email_enabled")) {
-            try {
-                Map<String, Object> u = jdbcTemplate.queryForMap(
-                        "select email, display_name from app_users where id = :id", Map.of("id", userId));
-                String absoluteLink = toAbsoluteLink(link);
-                emailDeliveryService.sendNotificationEmail(
-                        (String) u.get("email"), (String) u.get("display_name"), title, body, absoluteLink);
-            } catch (Exception e) {
-                log.warn("[NotificationService] Failed to send email for {}: {}", userId, e.getMessage());
-            }
+            java.util.concurrent.CompletableFuture.runAsync(() -> {
+                try {
+                    Map<String, Object> u = jdbcTemplate.queryForMap(
+                            "select email, display_name from app_users where id = :id", Map.of("id", userId));
+                    String absoluteLink = toAbsoluteLink(link);
+                    emailDeliveryService.sendNotificationEmail(
+                            userId, (String) u.get("email"), (String) u.get("display_name"), title, body, absoluteLink, type);
+                } catch (Exception e) {
+                    log.warn("[NotificationService] Failed to send email for {}: {}", userId, e.getMessage());
+                }
+            });
         }
     }
 
@@ -129,6 +131,12 @@ public class NotificationService {
      */
     public void notifyCompanyMembers(UUID companyId, UUID excludeUserId,
                                      String type, String title, String body, String link) {
+        notifyCompanyMembers(companyId, excludeUserId, type, title, body, link, false);
+    }
+
+    public void notifyCompanyMembers(UUID companyId, UUID excludeUserId,
+                                     String type, String title, String body, String link,
+                                     boolean sendEmail) {
         if (companyId == null) return;
         try {
             List<UUID> memberIds = jdbcTemplate.query("""
@@ -146,7 +154,7 @@ public class NotificationService {
 
             for (UUID memberId : memberIds) {
                 if (memberId == null || memberId.equals(excludeUserId)) continue;
-                notify(memberId, type, title, body, link, false);
+                notify(memberId, type, title, body, link, sendEmail);
             }
         } catch (Exception e) {
             log.warn("[NotificationService] Failed to notify members of company {}: {}",
