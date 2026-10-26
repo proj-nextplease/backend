@@ -111,8 +111,8 @@ app:
       expose-dev-otp: ${APP_AUTH_REGISTRATION_EXPOSE_DEV_OTP:false}
   mail:
     enabled: ${APP_MAIL_ENABLED:false}
-    from-address: ${APP_MAIL_FROM_ADDRESS:no-reply@nextplease.vn}
-    from-name: ${APP_MAIL_FROM_NAME:nextplease}
+    from-address: ${APP_MAIL_FROM_ADDRESS:no-reply@fonlio.vn}
+    from-name: ${APP_MAIL_FROM_NAME:Fonlio}
     brevo-api-key: ${BREVO_API_KEY:}
 
 management:

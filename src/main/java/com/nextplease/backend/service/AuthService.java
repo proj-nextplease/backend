@@ -253,7 +253,7 @@ public class AuthService {
 
         jdbcTemplate.update("""
                 insert into profiles (user_id, headline, visibility)
-                values (:userId, 'Ứng viên nextplease', '{}'::jsonb)
+                values (:userId, 'Ứng viên Fonlio', '{}'::jsonb)
                 """, Map.of("userId", userId));
 
         jdbcTemplate.update("""

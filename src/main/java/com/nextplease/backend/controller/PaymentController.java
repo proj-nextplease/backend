@@ -50,7 +50,7 @@ public class PaymentController {
         long orderCode = walletService.createTopUpRequest(userId, amountVnd);
         /* Mô tả hiện trên app ngân hàng của người trả. PayOS giới hạn 25 ký tự;
            dài hơn là bị từ chối tạo link. */
-        String description = "NextPlease " + orderCode % 1_000_000L;
+        String description = "Fonlio " + orderCode % 1_000_000L;
         Map<String, Object> payment = payOsService.createPaymentLink(orderCode, amountVnd, description);
 
         Map<String, Object> out = new java.util.LinkedHashMap<>(payment);

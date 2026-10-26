@@ -267,14 +267,35 @@ public class QuestService {
         recordQuestHistory(applicationId, "SUBMITTED");
         log.info("[QuestService] User {} applied to quest {} → qa {}", userId, questId, applicationId);
 
-        // Báo cho cả tổ chức chứ không riêng người đăng — xem giải thích ở
-        // ApplicationService.apply.
-        if (quest.get("company_id") instanceof UUID companyId) {
+        String questTitle = (String) quest.get("title");
+        String companyName = null;
+        UUID companyId = null;
+        if (quest.get("company_id") instanceof UUID cId) {
+            companyId = cId;
+            try {
+                companyName = jdbcTemplate.queryForObject(
+                        "select name from companies where id = :cId",
+                        Map.of("cId", cId), String.class);
+            } catch (Exception ignored) {}
+        }
+        String orgDisplay = (companyName != null && !companyName.isBlank()) ? companyName : "Ban tổ chức";
+
+        // 1. Gửi thông báo + email xác nhận cho ỨNG VIÊN
+        notificationService.notify(userId, "QUEST_STATUS",
+                "Đăng ký tham gia Quest thành công: " + questTitle,
+                "Bạn đã nộp đơn đăng ký tham gia Quest \"" + questTitle + "\" tại " + orgDisplay
+                        + ". Vui lòng chờ phản hồi duyệt từ ban tổ chức. Bạn có thể theo dõi tiến độ tại mục Đơn ứng tuyển trên Fonlio.",
+                "/candidates/dashboard/applications",
+                true);
+
+        // 2. Báo cho cả tổ chức qua thông báo in-app và email
+        if (companyId != null) {
             notificationService.notifyCompanyMembers(companyId, userId, "NEW_APPLICATION",
-                    "Có người tham gia Quest",
-                    "Một ứng viên vừa đăng ký tham gia \"" + quest.get("title") + "\".",
+                    "Có người tham gia Quest: " + questTitle,
+                    "Một ứng viên vừa đăng ký tham gia \"" + questTitle + "\". Hãy vào xem và duyệt đơn!",
                     "/businesses/dashboard/candidates?posting=" + questId
-                            + "&type=QUEST&app=" + applicationId);
+                            + "&type=QUEST&app=" + applicationId,
+                    true);
         }
 
         return Map.of("applicationId", applicationId, "questId", questId, "status", "SUBMITTED");
@@ -578,14 +599,13 @@ public class QuestService {
                     + (rejectReason != null && !rejectReason.isBlank() ? " (Lý do: " + rejectReason + ")" : "");
             notifLink = "/candidates/dashboard/applications";
         } else {
-            notifTitle = "Cập nhật tham gia Quest";
-            notifBody = "Đơn tham gia Quest \"" + questTitle + "\" của bạn đã được cập nhật.";
-            notifLink = questId != null ? "/quests/" + questId : "/candidates/dashboard/applications";
+            notifTitle = "Cập nhật tham gia Quest: " + questTitle;
+            notifBody = "Đơn tham gia Quest \"" + questTitle + "\" của bạn đã được cập nhật sang trạng thái: " + newStatus;
+            notifLink = "/candidates/dashboard/applications";
         }
 
-        boolean emailWorthy = newStatus.equals("ACCEPTED") || newStatus.equals("REJECTED") || newStatus.equals("COMPLETED");
         notificationService.notify(candidateUserId, "QUEST_STATUS",
-                notifTitle, notifBody, notifLink, emailWorthy);
+                notifTitle, notifBody, notifLink, true);
     }
 
     // ── private helpers ───────────────────────────────────────────────────────

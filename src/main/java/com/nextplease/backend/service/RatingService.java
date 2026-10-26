@@ -35,16 +35,18 @@ public class RatingService {
     private final NamedParameterJdbcTemplate jdbcTemplate;
     private final CompanyAccessService companyAccessService;
     private final ConfigService configService;
+    private final NotificationService notificationService;
 
     public RatingService(NamedParameterJdbcTemplate jdbcTemplate, CompanyAccessService companyAccessService,
-                         ConfigService configService) {
+                         ConfigService configService, NotificationService notificationService) {
         this.jdbcTemplate = jdbcTemplate;
         this.companyAccessService = companyAccessService;
         this.configService = configService;
+        this.notificationService = notificationService;
     }
 
-    /** Thông tin đơn cần để kiểm tra quyền + trạng thái. */
-    private record AppContext(UUID companyId, UUID candidateId, String status) {}
+    /** Thông tin đơn cần để kiểm tra quyền + trạng thái + thông báo. */
+    private record AppContext(UUID companyId, UUID candidateId, String status, String title, String companyName) {}
 
     /**
      * Tạo đánh giá mới cho một đơn (Job hoặc Quest).
@@ -91,6 +93,21 @@ public class RatingService {
         log.info("[RatingService] User {} rated candidate {} ({} sao) cho {} {}",
                 raterUserId, ctx.candidateId(), score, isQuest ? "quest_application" : "application", sourceId);
 
+        // Gửi thông báo + email cho ứng viên
+        String orgName = ctx.companyName() != null && !ctx.companyName().isBlank() ? ctx.companyName() : "Nhà tuyển dụng";
+        String itemTitle = ctx.title() != null && !ctx.title().isBlank() ? ctx.title() : "công việc";
+        String commentSnippet = (comment != null && !comment.isBlank()) ? "Lời nhận xét: \"" + comment + "\". " : "";
+        String rewardSnippet = score == 5 ? "Bạn nhận được +2.000 Điểm thưởng 5 sao vào ví!" : "";
+
+        notificationService.notify(
+                ctx.candidateId(),
+                "APPLICATION_RATED",
+                "⭐ Bạn vừa nhận được đánh giá " + score + " sao từ " + orgName,
+                orgName + " đã gửi đánh giá " + score + " sao cho bạn đối với \"" + itemTitle + "\". " + commentSnippet + rewardSnippet,
+                "/candidates/dashboard/applications",
+                true
+        );
+
         Map<String, Object> result = new HashMap<>();
         result.put("ratingId", ratingId);
         result.put("score", score);
@@ -129,6 +146,23 @@ public class RatingService {
             UUID sourceId = isQuest ? (UUID) rating.get("quest_application_id") : (UUID) rating.get("application_id");
             grantFiveStarReward(candidateId, isQuest, sourceId);
         }
+
+        // Gửi thông báo + email khi cập nhật đánh giá
+        boolean isQuest = rating.get("quest_application_id") != null;
+        UUID sourceId = isQuest ? (UUID) rating.get("quest_application_id") : (UUID) rating.get("application_id");
+        AppContext ctx = loadContext(isQuest, sourceId);
+        String orgName = ctx.companyName() != null && !ctx.companyName().isBlank() ? ctx.companyName() : "Nhà tuyển dụng";
+        String itemTitle = ctx.title() != null && !ctx.title().isBlank() ? ctx.title() : "công việc";
+        String commentSnippet = (comment != null && !comment.isBlank()) ? "Lời nhận xét mới: \"" + comment + "\". " : "";
+
+        notificationService.notify(
+                (UUID) rating.get("candidate_user_id"),
+                "APPLICATION_RATED",
+                "⭐ Đánh giá được cập nhật: " + score + " sao từ " + orgName,
+                orgName + " đã cập nhật lại đánh giá của bạn cho \"" + itemTitle + "\" thành " + score + " sao. " + commentSnippet,
+                "/candidates/dashboard/applications",
+                true
+        );
 
         log.info("[RatingService] User {} sửa đánh giá {} → {} sao", raterUserId, ratingId, score);
     }
@@ -199,21 +233,25 @@ public class RatingService {
         try {
             Map<String, Object> row = isQuest
                     ? jdbcTemplate.queryForMap("""
-                            select q.company_id, qa.candidate_id, qa.status
+                            select q.company_id, qa.candidate_id, qa.status, q.title, c.name as company_name
                             from quest_applications qa
                             join quests q on q.id = qa.quest_id
+                            join companies c on c.id = q.company_id
                             where qa.id = :id
                             """, Map.of("id", sourceId))
                     : jdbcTemplate.queryForMap("""
-                            select j.company_id, a.candidate_id, a.status
+                            select j.company_id, a.candidate_id, a.status, j.title, c.name as company_name
                             from applications a
                             join jobs j on j.id = a.job_id
+                            join companies c on c.id = j.company_id
                             where a.id = :id
                             """, Map.of("id", sourceId));
             return new AppContext(
                     (UUID) row.get("company_id"),
                     (UUID) row.get("candidate_id"),
-                    (String) row.get("status"));
+                    (String) row.get("status"),
+                    (String) row.get("title"),
+                    (String) row.get("company_name"));
         } catch (org.springframework.dao.EmptyResultDataAccessException e) {
             throw new AppException(HttpStatus.NOT_FOUND, "Không tìm thấy đơn ứng tuyển.");
         }

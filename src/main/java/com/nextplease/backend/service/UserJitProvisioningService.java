@@ -75,7 +75,7 @@ public class UserJitProvisioningService {
                 .addValue("avatarUrl", avatarUrl);
         jdbcTemplate.update("""
                 insert into profiles (user_id, headline, avatar_url, visibility)
-                values (:userId, 'Ứng viên nextplease', :avatarUrl, '{}'::jsonb)
+                values (:userId, 'Ứng viên Fonlio', :avatarUrl, '{}'::jsonb)
                 """, profileParams);
 
         jdbcTemplate.update("""

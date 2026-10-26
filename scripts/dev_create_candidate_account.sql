@@ -107,7 +107,7 @@ BEGIN
     ON CONFLICT (user_id, role_code) DO NOTHING;
 
     INSERT INTO profiles (user_id, headline, avatar_url, visibility)
-    VALUES (v_app_id, 'Ứng viên nextplease', NULL, '{}'::jsonb)
+    VALUES (v_app_id, 'Ứng viên Fonlio', NULL, '{}'::jsonb)
     ON CONFLICT (user_id) DO NOTHING;
 
     INSERT INTO wallets (user_id, np_balance, locked_np_balance)

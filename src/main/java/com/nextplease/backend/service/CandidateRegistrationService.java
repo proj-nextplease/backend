@@ -260,7 +260,7 @@ public class CandidateRegistrationService {
                 returning id
                 """, Map.of(
                 "userId", userId,
-                "headline", "Ứng viên nextplease"
+                "headline", "Ứng viên Fonlio"
         ), UUID.class);
 
         jdbcTemplate.update("""
