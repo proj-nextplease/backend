@@ -254,7 +254,7 @@ public class ExternalJobService {
                 .append("&user_ip=").append(enc(callerIp == null || callerIp.isBlank() ? "127.0.0.1" : callerIp))
                 .append("&user_agent=").append(enc(
                         userAgent == null || userAgent.isBlank()
-                                ? "nextplease/1.0 (+https://nextplease.online)"
+                                ? "fonlio/1.0 (+https://fonlio.vn)"
                                 : userAgent));
         if (keywords != null && !keywords.isBlank()) url.append("&keywords=").append(enc(keywords));
         if (location != null && !location.isBlank()) url.append("&location=").append(enc(location));

@@ -14,7 +14,7 @@ public class HealthController {
     @GetMapping
     public ApiResponse<Map<String, Object>> health() {
         return ApiResponse.success(Map.of(
-                "service", "nextplease-backend",
+                "service", "fonlio-backend",
                 "status", "UP",
                 "timestamp", Instant.now().toString()
         ));
