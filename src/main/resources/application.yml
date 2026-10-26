@@ -1,6 +1,6 @@
 spring:
   application:
-    name: nextplease-backend
+    name: fonlio-backend
   datasource:
     url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/nextplease}
     username: ${DB_USERNAME:postgres}

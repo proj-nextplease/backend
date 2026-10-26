@@ -200,7 +200,7 @@ public class DiscussionService {
                                 (select c.name from companies c
                                   where c.owner_user_id = u.id and c.deleted_at is null
                                   order by c.created_at limit 1),
-                                'Thành viên NextPlease') end as "authorRole",
+                                'Thành viên Fonlio') end as "authorRole",
                        (select count(*) from discussion_post_likes l where l.post_id = p.id) as "likesCount",
                        (select count(*) from discussion_comments cm
                          where cm.post_id = p.id and cm.deleted_at is null) as "commentsCount",
@@ -311,7 +311,7 @@ public class DiscussionService {
                                 (select c.name from companies c
                                   where c.owner_user_id = u.id and c.deleted_at is null
                                   order by c.created_at limit 1),
-                                'Thành viên NextPlease') end as role,
+                                'Thành viên Fonlio') end as role,
                            cm.content,
                            cm.created_at as "createdAt",
                            row_number() over (partition by cm.post_id order by cm.created_at desc) as rn
@@ -612,7 +612,7 @@ public class DiscussionService {
                                 (select c.name from companies c
                                   where c.owner_user_id = u.id and c.deleted_at is null
                                   order by c.created_at limit 1),
-                                'Thành viên NextPlease') end as role,
+                                'Thành viên Fonlio') end as role,
                        cm.content,
                        cm.created_at as "createdAt"
                 from discussion_comments cm
@@ -671,7 +671,7 @@ public class DiscussionService {
                                 (select c.name from companies c
                                   where c.owner_user_id = u.id and c.deleted_at is null
                                   order by c.created_at limit 1),
-                                'Thành viên NextPlease') end as role,
+                                'Thành viên Fonlio') end as role,
                        cm.content,
                        cm.created_at as "createdAt"
                 from discussion_comments cm

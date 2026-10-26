@@ -10,12 +10,12 @@ import org.springframework.context.annotation.Configuration;
 public class OpenApiConfig {
 
     @Bean
-    OpenAPI nextPleaseOpenApi() {
+    OpenAPI fonlioOpenApi() {
         return new OpenAPI()
                 .info(new Info()
-                        .title("Next Please Backend API")
+                        .title("Fonlio Backend API")
                         .version("v1")
-                        .description("REST API for Next Please web-first MVP.")
+                        .description("REST API for Fonlio.")
                         .license(new License().name("Private")));
     }
 }
