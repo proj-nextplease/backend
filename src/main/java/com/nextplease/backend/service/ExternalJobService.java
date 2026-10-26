@@ -270,7 +270,7 @@ public class ExternalJobService {
                     // BẮT BUỘC. Thiếu header này API trả
                     // "Undeclared referrer. Please add a Referer header."
                     // Tài liệu không nhắc tới, chỉ lộ ra khi gọi thật.
-                    .header("Referer", "https://nextplease.online/jobs")
+                    .header("Referer", "https://fonlio.vn/jobs")
                     .header("Accept", "application/json")
                     .timeout(Duration.ofSeconds(20))
                     .GET()
