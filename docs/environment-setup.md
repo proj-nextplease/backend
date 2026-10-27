@@ -51,6 +51,7 @@ Add these variables to the Railway backend service:
 ```env
 APP_SECURITY_JWT_ENABLED=false
 APP_CORS_ALLOWED_ORIGINS=https://your-vercel-domain.vercel.app,http://localhost:5173
+APP_FRONTEND_BASE_URL=https://www.fonlio.online
 
 DATABASE_URL=jdbc:postgresql://your-supabase-host:5432/postgres?sslmode=require
 DB_USERNAME=postgres.your-project-ref
@@ -60,6 +61,16 @@ SUPABASE_PROJECT_URL=https://your-project.supabase.co
 SUPABASE_JWKS_URI=https://your-project.supabase.co/auth/v1/.well-known/jwks.json
 SUPABASE_ISSUER=https://your-project.supabase.co/auth/v1
 ```
+
+`APP_FRONTEND_BASE_URL` là gốc của mọi link gửi ra ngoài hệ thống: nút trong
+email mời nhận việc và mời vào công ty, cùng `returnUrl` mà PayOS dùng để đưa
+người dùng quay lại sau khi thanh toán. Đặt sai thì người nhận email bấm vào và
+được dẫn về máy của chính họ.
+
+Lưu ý thêm: `NotificationService.toAbsoluteLink` đọc biến `APP_PUBLIC_URL`
+TRƯỚC, và đọc thẳng từ môi trường chứ không qua cấu hình Spring. Nếu biến đó
+còn sót lại trên Railway với giá trị cũ thì nó sẽ đè lên `APP_FRONTEND_BASE_URL`
+đối với link trong thông báo. Kiểm tra và xoá nó nếu không dùng tới.
 
 After saving variables, redeploy the Railway service.
 

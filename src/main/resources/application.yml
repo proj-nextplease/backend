@@ -88,7 +88,11 @@ app:
   careerjet:
     api-key: ${CAREERJET_API_KEY:}
   frontend:
-    base-url: ${APP_FRONTEND_BASE_URL:http://localhost:5173}
+    # Dùng để dựng link TUYỆT ĐỐI gửi ra ngoài: nút trong email mời nhận việc /
+    # mời vào công ty, và returnUrl trả về từ PayOS. Mặc định là bản deploy chứ
+    # không phải localhost: thiếu biến này ở môi trường chạy thật thì email gửi
+    # cho người dùng sẽ trỏ về máy của chính họ. Máy dev đặt lại qua .env.
+    base-url: ${APP_FRONTEND_BASE_URL:https://www.fonlio.online}
   cors:
     allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5173}
   security:
