@@ -15,6 +15,8 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * Manages the "Proof of Work" credential submission and verification flow.
@@ -39,6 +41,7 @@ public class CredentialService {
     private final ConfigService configService;
     private final GamificationService gamificationService;
     private final ContentModerationService moderationService;
+    private final AiVerificationWorker aiVerificationWorker;
 
     public CredentialService(
             NamedParameterJdbcTemplate jdbcTemplate,
@@ -48,7 +51,8 @@ public class CredentialService {
             NotificationService notificationService,
             ConfigService configService,
             GamificationService gamificationService,
-            ContentModerationService moderationService
+            ContentModerationService moderationService,
+            AiVerificationWorker aiVerificationWorker
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.reputationService = reputationService;
@@ -58,6 +62,7 @@ public class CredentialService {
         this.configService = configService;
         this.gamificationService = gamificationService;
         this.moderationService = moderationService;
+        this.aiVerificationWorker = aiVerificationWorker;
     }
 
     /** Resolve the app_users id that owns a profile (notification recipient). */
@@ -83,12 +88,12 @@ public class CredentialService {
                 insert into experiences (
                     profile_id, project_name, position, category, role_level,
                     description, proof_link, proof_images, started_at, ended_at,
-                    verification_status, source, content_flag, created_at, updated_at
+                    verification_status, source, content_flag, ai_status, created_at, updated_at
                 ) values (
                     :profileId, :projectName, :position, :category, :roleLevel,
                     :description, :proofLink, :proofImages::jsonb,
                     cast(:startedAt as date), cast(:endedAt as date),
-                    'PENDING', 'CREDENTIAL', :contentFlag, now(), now()
+                    'PENDING', 'CREDENTIAL', :contentFlag, 'PENDING', now(), now()
                 )
                 returning id
                 """, new MapSqlParameterSource()
@@ -114,7 +119,19 @@ public class CredentialService {
                 "Có kinh nghiệm \"" + req.position() + "\" vừa được nộp vào hàng chờ xác thực.",
                 "/nextplease-admin-portal/b2b-reviews");
 
-        return Map.of("experienceId", expId, "status", "PENDING");
+        // Kích hoạt AI Hybrid thẩm định bất đồng bộ sau khi transaction đã commit
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    aiVerificationWorker.processAsync(expId);
+                }
+            });
+        } else {
+            aiVerificationWorker.processAsync(expId);
+        }
+
+        return Map.of("experienceId", expId, "status", "PENDING", "aiStatus", "PENDING");
     }
 
     public List<Map<String, Object>> getMySubmissions(UUID userId) {
@@ -123,7 +140,12 @@ public class CredentialService {
                 select id, project_name, position, category, role_level,
                        description, proof_link, proof_images::text as proof_images, verification_status,
                        reject_reason, started_at, ended_at, created_at,
-                       express_verification as "expressVerification"
+                       express_verification as "expressVerification",
+                       ai_status as "aiStatus",
+                       ai_verdict as "aiVerdict",
+                       ai_confidence_score as "aiConfidenceScore",
+                       ai_feedback as "aiFeedback",
+                       verified_by_type as "verifiedByType"
                 from experiences
                 where profile_id = :profileId
                   and deleted_at is null
@@ -151,6 +173,7 @@ public class CredentialService {
                 set verification_status = 'APPROVED',
                     verified_by         = :adminUserId,
                     verified_at         = now(),
+                    verified_by_type    = coalesce(verified_by_type, case when :adminUserId = '00000000-0000-0000-0000-0000000000a1'::uuid then 'AI' else 'ADMIN' end),
                     reject_reason       = null,
                     updated_at          = now()
                 where id = :id
@@ -197,6 +220,7 @@ public class CredentialService {
                 set verification_status = 'REJECTED',
                     verified_by         = :adminUserId,
                     verified_at         = now(),
+                    verified_by_type    = coalesce(verified_by_type, case when :adminUserId = '00000000-0000-0000-0000-0000000000a1'::uuid then 'AI' else 'ADMIN' end),
                     reject_reason       = :reason,
                     updated_at          = now()
                 where id = :id
@@ -289,6 +313,12 @@ public class CredentialService {
                        e.created_at,
                        e.express_verification as "expressVerification",
                        e.content_flag as "contentFlag",
+                       e.ai_status as "aiStatus",
+                       e.ai_verdict as "aiVerdict",
+                       e.ai_confidence_score as "aiConfidenceScore",
+                       e.ai_feedback as "aiFeedback",
+                       e.ai_analysis_data as "aiAnalysisData",
+                       e.verified_by_type as "verifiedByType",
                        u.email         as candidate_email,
                        u.display_name  as candidate_name,
                        p.reputation_score,
@@ -329,6 +359,12 @@ public class CredentialService {
                        e.created_at,
                        e.express_verification as "expressVerification",
                        e.content_flag as "contentFlag",
+                       e.ai_status as "aiStatus",
+                       e.ai_verdict as "aiVerdict",
+                       e.ai_confidence_score as "aiConfidenceScore",
+                       e.ai_feedback as "aiFeedback",
+                       e.ai_analysis_data as "aiAnalysisData",
+                       e.verified_by_type as "verifiedByType",
                        u.email         as candidate_email,
                        u.display_name  as candidate_name,
                        p.reputation_score,
