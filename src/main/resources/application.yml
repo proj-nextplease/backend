@@ -118,6 +118,10 @@ app:
     from-address: ${APP_MAIL_FROM_ADDRESS:no-reply@fonlio.vn}
     from-name: ${APP_MAIL_FROM_NAME:Fonlio}
     brevo-api-key: ${BREVO_API_KEY:}
+  gemini:
+    api-key: ${GEMINI_API_KEY:}
+    model: ${GEMINI_MODEL:gemini-3.5-flash-lite}
+    timeout-seconds: ${GEMINI_TIMEOUT_SECONDS:45}
 
 management:
   endpoints:
