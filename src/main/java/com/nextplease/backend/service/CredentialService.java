@@ -84,55 +84,24 @@ public class CredentialService {
 
         UUID profileId = getProfileIdOrThrow(userId);
 
-        // ── CHỐNG TRÙNG LẶP (DUPLICATE & SPAM PREVENTION) ──────────────────
-        // 1. Kiểm tra nếu cùng ứng viên đã có hoạt động cùng tên đang chờ duyệt hoặc đã duyệt
+        // ── CHỐNG SPAM CLICK DỒN DẬP TRƯỚC KHI AI XỬ LÝ ──────────────────
+        // Chỉ chặn nếu người dùng bấm nộp liên tục cùng 1 tên hoạt động trong khi bản ghi trước VẪN ĐANG PENDING CHỜ DUYỆT
         String cleanProjectName = req.projectName() != null ? req.projectName().trim() : "";
-        List<Map<String, Object>> existingCandidateExps = jdbcTemplate.queryForList("""
-                select id, project_name, verification_status
-                from experiences
+        List<Map<String, Object>> pendingSameName = jdbcTemplate.queryForList("""
+                select id from experiences
                 where profile_id = :profileId
                   and lower(trim(project_name)) = lower(:projectName)
+                  and verification_status = 'PENDING'
                   and deleted_at is null
                 """, Map.of("profileId", profileId, "projectName", cleanProjectName));
 
-        for (Map<String, Object> existing : existingCandidateExps) {
-            String vStatus = (String) existing.get("verification_status");
-            if ("APPROVED".equalsIgnoreCase(vStatus)) {
-                throw new AppException(HttpStatus.CONFLICT,
-                        "Hoạt động \"" + cleanProjectName + "\" đã được xác thực trước đó trên hồ sơ của bạn. Không thể nộp lại.");
-            }
-            if ("PENDING".equalsIgnoreCase(vStatus)) {
-                throw new AppException(HttpStatus.CONFLICT,
-                        "Minh chứng cho hoạt động \"" + cleanProjectName + "\" đang trong hàng chờ thẩm định. Vui lòng không nộp trùng lặp.");
-            }
+        if (!pendingSameName.isEmpty()) {
+            throw new AppException(HttpStatus.CONFLICT,
+                    "Minh chứng cho hoạt động \"" + cleanProjectName + "\" đang trong hàng chờ thẩm định. Vui lòng chờ kết quả trước khi gửi tiếp.");
         }
 
-        // 2. Tính mã Hash vân tay bằng chứng (proofHash) từ hình ảnh hoặc link Drive
+        // Tính proofHash nếu có để hỗ trợ truy vết
         String proofHash = computeProofHash(req.proofLink(), req.proofImages());
-
-        if (proofHash != null && !proofHash.isBlank()) {
-            // Kiểm tra xem vân tay bằng chứng này đã từng được duyệt (APPROVED) trên toàn hệ thống chưa
-            List<Map<String, Object>> duplicateProofs = jdbcTemplate.queryForList("""
-                    select id, profile_id, project_name, verification_status
-                    from experiences
-                    where proof_hash = :proofHash
-                      and verification_status = 'APPROVED'
-                      and deleted_at is null
-                    limit 1
-                    """, Map.of("proofHash", proofHash));
-
-            if (!duplicateProofs.isEmpty()) {
-                Map<String, Object> dup = duplicateProofs.get(0);
-                UUID ownerProfileId = (UUID) dup.get("profile_id");
-                if (profileId.equals(ownerProfileId)) {
-                    throw new AppException(HttpStatus.CONFLICT,
-                            "File/link minh chứng này đã từng được duyệt cho một hoạt động khác của bạn. Không thể tái sử dụng.");
-                } else {
-                    throw new AppException(HttpStatus.CONFLICT,
-                            "File/link minh chứng này đã được xác thực bởi một ứng viên khác trên hệ thống. Vui lòng cung cấp minh chứng chính chủ.");
-                }
-            }
-        }
 
         UUID expId = jdbcTemplate.queryForObject("""
                 insert into experiences (

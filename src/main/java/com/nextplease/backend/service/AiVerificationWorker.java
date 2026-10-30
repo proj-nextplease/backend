@@ -3,6 +3,7 @@ package com.nextplease.backend.service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nextplease.backend.dto.ai.AiVerificationResult;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -59,7 +60,7 @@ public class AiVerificationWorker {
 
         // 2. Lấy dữ liệu minh chứng và ứng viên
         List<Map<String, Object>> rows = jdbcTemplate.queryForList("""
-                select e.id, e.project_name, e.position, e.category, e.role_level,
+                select e.id, e.profile_id, e.project_name, e.position, e.category, e.role_level,
                        e.description, e.proof_link, e.proof_images::text as proof_images,
                        e.started_at, e.ended_at, e.verification_status,
                        u.display_name as candidate_name, u.email as candidate_email
@@ -75,15 +76,33 @@ public class AiVerificationWorker {
         }
 
         Map<String, Object> exp = rows.get(0);
+        UUID profileId = (UUID) exp.get("profile_id");
         String currentStatus = (String) exp.get("verification_status");
         if (!"PENDING".equals(currentStatus)) {
             log.info("[AiWorker] Minh chứng {} không ở trạng thái PENDING (hiện tại: {}), dừng AI.", experienceId, currentStatus);
             return;
         }
 
+        // Lấy danh sách các hoạt động đã được duyệt trước đó của ứng viên này để AI so sánh ngữ nghĩa
+        List<Map<String, Object>> candidateApprovedRows = jdbcTemplate.queryForList("""
+                select project_name, position, category, proof_link
+                from experiences
+                where profile_id = :profileId
+                  and verification_status = 'APPROVED'
+                  and deleted_at is null
+                  and id != :id
+                """, Map.of("profileId", profileId, "id", experienceId));
+
+        List<String> approvedSummary = new ArrayList<>();
+        for (Map<String, Object> ar : candidateApprovedRows) {
+            String pName = (String) ar.get("project_name");
+            String pos = (String) ar.get("position");
+            approvedSummary.add(pName + (pos != null ? " (" + pos + ")" : ""));
+        }
+
         List<String> images = parseImages((String) exp.get("proof_images"));
 
-        // 3. Gọi Gemini thẩm định
+        // 3. Gọi Gemini thẩm định (kèm lịch sử các hoạt động đã duyệt để phát hiện trùng lặp)
         AiVerificationResult result = geminiService.evaluateCredential(
                 (String) exp.get("candidate_name"),
                 (String) exp.get("candidate_email"),
@@ -95,7 +114,8 @@ public class AiVerificationWorker {
                 exp.get("started_at") != null ? exp.get("started_at").toString() : null,
                 exp.get("ended_at") != null ? exp.get("ended_at").toString() : null,
                 (String) exp.get("proof_link"),
-                images
+                images,
+                approvedSummary
         );
 
         log.info("[AiWorker] Kết quả AI cho expId={}: verdict={}, score={}, nameMatched={}",
