@@ -44,6 +44,7 @@ public class ProfileService {
     private final UserJitProvisioningService userJitProvisioningService;
     private final CurrentUserService currentUserService;
     private final LegalConsentService legalConsentService;
+    private final AiVerificationWorker aiVerificationWorker;
     private final boolean jwtEnabled;
 
     public ProfileService(
@@ -54,6 +55,7 @@ public class ProfileService {
             UserJitProvisioningService userJitProvisioningService,
             CurrentUserService currentUserService,
             LegalConsentService legalConsentService,
+            @org.springframework.beans.factory.annotation.Autowired(required = false) AiVerificationWorker aiVerificationWorker,
             @Value("${app.security.jwt.enabled:false}") boolean jwtEnabled) {
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
@@ -62,6 +64,7 @@ public class ProfileService {
         this.userJitProvisioningService = userJitProvisioningService;
         this.currentUserService = currentUserService;
         this.legalConsentService = legalConsentService;
+        this.aiVerificationWorker = aiVerificationWorker;
         this.jwtEnabled = jwtEnabled;
     }
 
@@ -326,7 +329,8 @@ public class ProfileService {
                         rs.getString("proof_link"),
                         "APPROVED".equals(rs.getString("verification_status")),
                         ExperienceRewards.expFor(rs.getString("category")),
-                        ExperienceRewards.rsFor(rs.getString("role_level"))));
+                        ExperienceRewards.rsFor(rs.getString("role_level")),
+                        rs.getString("verification_status")));
 
         boolean onboardingCompleted = profile.get("onboarding_completed") != null
                 && (Boolean) profile.get("onboarding_completed");
@@ -951,6 +955,8 @@ public class ProfileService {
                     .addValue("roleLevel", sanitizeRoleLevel(exp.roleLevel()))
                     .addValue("proofLink", blankToNull(exp.proofLink()));
 
+            UUID idToVerify = null;
+
             if (existingId != null && existingStatus.containsKey(existingId)) {
                 keptIds.add(existingId);
                 boolean pending = "PENDING".equals(existingStatus.get(existingId));
@@ -971,6 +977,11 @@ public class ProfileService {
                                 updated_at   = now()
                             where id = :id
                             """, params.addValue("id", existingId));
+
+                    if ((exp.proofImages() != null && !exp.proofImages().isEmpty())
+                            || (exp.proofLink() != null && !exp.proofLink().isBlank())) {
+                        idToVerify = existingId;
+                    }
                 } else {
                     // Already reviewed → never change category/role_level (would
                     // misrepresent the already-awarded points). Only edit content.
@@ -988,12 +999,27 @@ public class ProfileService {
                             """, params.addValue("id", existingId));
                 }
             } else {
+                UUID newId = UUID.randomUUID();
                 jdbcTemplate.update(
                         """
                                 insert into experiences (id, profile_id, project_name, position, category, role_level, proof_link, description, started_at, ended_at, proof_images, verification_status, source, created_at, updated_at)
-                                values (gen_random_uuid(), :profileId, :organization, :title, :category, :roleLevel, :proofLink, :description, :startDate, :endDate, cast(:proofImages as jsonb), 'PENDING', 'PORTFOLIO', now(), now())
+                                values (:id, :profileId, :organization, :title, :category, :roleLevel, :proofLink, :description, :startDate, :endDate, cast(:proofImages as jsonb), 'PENDING', 'PORTFOLIO', now(), now())
                                 """,
-                        params);
+                        params.addValue("id", newId));
+
+                if ((exp.proofImages() != null && !exp.proofImages().isEmpty())
+                        || (exp.proofLink() != null && !exp.proofLink().isBlank())) {
+                    idToVerify = newId;
+                }
+            }
+
+            // Tự động kích hoạt luồng thẩm định AI nếu dự án có ảnh hoặc link minh chứng
+            if (idToVerify != null && aiVerificationWorker != null) {
+                try {
+                    aiVerificationWorker.processAsync(idToVerify);
+                } catch (Exception ex) {
+                    log.warn("Không thể kích hoạt thẩm định AI cho kinh nghiệm {}", idToVerify, ex);
+                }
             }
         }
 
