@@ -65,6 +65,26 @@ public class GeminiVerificationService {
             String proofLink,
             List<String> proofImages
     ) {
+        return evaluateCredential(
+                candidateName, candidateEmail, projectName, position, category,
+                roleLevel, description, startedAt, endedAt, proofLink, proofImages, List.of()
+        );
+    }
+
+    public AiVerificationResult evaluateCredential(
+            String candidateName,
+            String candidateEmail,
+            String projectName,
+            String position,
+            String category,
+            String roleLevel,
+            String description,
+            String startedAt,
+            String endedAt,
+            String proofLink,
+            List<String> proofImages,
+            List<String> alreadyApprovedActivities
+    ) {
         if (!isConfigured()) {
             log.warn("[GeminiVerificationService] Gemini API Key chưa được cấu hình. Bỏ qua thẩm định AI.");
             return AiVerificationResult.fallback("Chưa cấu hình API Key AI, chuyển hàng chờ Admin.");
@@ -98,7 +118,8 @@ public class GeminiVerificationService {
             // 2. Chuẩn bị prompt chỉ dẫn cho AI (kèm chỉ dẫn rõ ràng khi có ảnh hay chỉ có link ngoài)
             String promptText = buildVerificationPrompt(
                     candidateName, candidateEmail, projectName, position, category,
-                    roleLevel, description, startedAt, endedAt, proofLink, hasAttachedImages
+                    roleLevel, description, startedAt, endedAt, proofLink, hasAttachedImages,
+                    alreadyApprovedActivities
             );
             parts.add(Map.of("text", promptText));
             parts.addAll(imageParts);
@@ -150,13 +171,30 @@ public class GeminiVerificationService {
             String startedAt,
             String endedAt,
             String proofLink,
-            boolean hasAttachedImages
+            boolean hasAttachedImages,
+            List<String> alreadyApprovedActivities
     ) {
+        String duplicateCheckGuidance = "";
+        if (alreadyApprovedActivities != null && !alreadyApprovedActivities.isEmpty()) {
+            duplicateCheckGuidance = """
+                    DANH SÁCH HOẠT ĐỘNG ỨNG VIÊN ĐÃ ĐƯỢC DUYỆT TRƯỚC ĐÓ TRÊN HỒ SƠ:
+                    %s
+
+                    QUY TẮC PHÁT HIỆN TRÙNG LẶP NỘI DUNG (DUPLICATE DETECTION):
+                    - Đọc nội dung trên ảnh (chứng chỉ, bằng khen, giấy xác nhận) hoặc link đính kèm.
+                    - Nếu ảnh/bằng chứng này thực chất là CÙNG MỘT SỰ KIỆN / CHỨNG CHỈ đã được duyệt trước đó (dù ứng viên có đổi tên hoạt động, ví dụ: "FPT Talent" vs "FPT Talent Assessment", hoặc "Mùa hè xanh 2024" vs "MHX 2024"):
+                      + BẮT BUỘC ĐÁNH GIÁ: "verdict": "REJECT"
+                      + "confidence_score": 20
+                      + "feedback": "Bằng chứng này trùng lặp với hoạt động đã được duyệt trước đó trên hồ sơ của bạn."
+                      + "risk_flags": ["Trùng lặp hoạt động đã duyệt", "Cố tình nộp lại cùng 1 chứng chỉ"]
+                    """.formatted(String.join("\n- ", alreadyApprovedActivities));
+        }
+
         String additionalGuidance = hasAttachedImages
                 ? """
                   TRƯỜNG HỢP CÓ ẢNH MINH CHỨNG:
                   - Đọc kỹ văn bản (OCR) trên ảnh, tìm họ tên ứng viên (hoặc viết tắt/không dấu), tên chứng chỉ, cơ quan cấp.
-                  - Nếu tên trùng khớp và là chứng chỉ/minh chứng hợp lệ -> Đánh giá APPROVE (85-100).
+                  - Nếu tên trùng khớp và là chứng chỉ/minh chứng hợp lệ (và không trùng với hoạt động đã duyệt) -> Đánh giá APPROVE (85-100).
                   """
                 : """
                   TRƯỜNG HỢP KHÔNG CÓ ẢNH TRỰC TIẾP (ỨNG VIÊN CHỈ CUNG CẤP LINK NGOÀI NHƯ GOOGLE DRIVE, FACEBOOK, WEBSITE):
@@ -185,6 +223,8 @@ public class GeminiVerificationService {
                 - Mô tả công việc: %s
                 - Thời gian: Từ %s đến %s
                 - Link minh chứng đi kèm: %s
+
+                %s
 
                 QUY TẮC THẨM ĐỊNH:
                 1. Đọc văn bản trên ảnh (OCR): Tìm xem có tên ứng viên không. Chấp nhận các biến thể không dấu, đảo họ tên (ví dụ: Nguyen Van A vs An Nguyen).
@@ -223,6 +263,7 @@ public class GeminiVerificationService {
                 startedAt != null ? startedAt : "Không rõ",
                 endedAt != null ? endedAt : "Không rõ",
                 proofLink != null ? proofLink : "Không có",
+                duplicateCheckGuidance,
                 additionalGuidance
         );
     }

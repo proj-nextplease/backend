@@ -84,14 +84,33 @@ public class CredentialService {
 
         UUID profileId = getProfileIdOrThrow(userId);
 
+        // ── CHỐNG SPAM CLICK DỒN DẬP TRƯỚC KHI AI XỬ LÝ ──────────────────
+        // Chỉ chặn nếu người dùng bấm nộp liên tục cùng 1 tên hoạt động trong khi bản ghi trước VẪN ĐANG PENDING CHỜ DUYỆT
+        String cleanProjectName = req.projectName() != null ? req.projectName().trim() : "";
+        List<Map<String, Object>> pendingSameName = jdbcTemplate.queryForList("""
+                select id from experiences
+                where profile_id = :profileId
+                  and lower(trim(project_name)) = lower(:projectName)
+                  and verification_status = 'PENDING'
+                  and deleted_at is null
+                """, Map.of("profileId", profileId, "projectName", cleanProjectName));
+
+        if (!pendingSameName.isEmpty()) {
+            throw new AppException(HttpStatus.CONFLICT,
+                    "Minh chứng cho hoạt động \"" + cleanProjectName + "\" đang trong hàng chờ thẩm định. Vui lòng chờ kết quả trước khi gửi tiếp.");
+        }
+
+        // Tính proofHash nếu có để hỗ trợ truy vết
+        String proofHash = computeProofHash(req.proofLink(), req.proofImages());
+
         UUID expId = jdbcTemplate.queryForObject("""
                 insert into experiences (
                     profile_id, project_name, position, category, role_level,
-                    description, proof_link, proof_images, started_at, ended_at,
+                    description, proof_link, proof_images, proof_hash, started_at, ended_at,
                     verification_status, source, content_flag, ai_status, created_at, updated_at
                 ) values (
                     :profileId, :projectName, :position, :category, :roleLevel,
-                    :description, :proofLink, :proofImages::jsonb,
+                    :description, :proofLink, :proofImages::jsonb, :proofHash,
                     cast(:startedAt as date), cast(:endedAt as date),
                     'PENDING', 'CREDENTIAL', :contentFlag, 'PENDING', now(), now()
                 )
@@ -107,6 +126,7 @@ public class CredentialService {
                 .addValue("description", req.description())
                 .addValue("proofLink", req.proofLink())
                 .addValue("proofImages", serializeImages(req.proofImages()))
+                .addValue("proofHash", proofHash)
                 .addValue("startedAt", toFirstOfMonth(req.startedAt()))
                 .addValue("endedAt", toFirstOfMonth(req.endedAt())),
                 UUID.class);
@@ -495,6 +515,52 @@ public class CredentialService {
             String startedAt,
             String endedAt
     ) {}
+
+    private String computeProofHash(String proofLink, List<String> proofImages) {
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            boolean hasData = false;
+
+            if (proofLink != null && !proofLink.isBlank()) {
+                String normalizedLink = proofLink.trim().toLowerCase();
+                // Loại bỏ params thừa và trailing slash
+                if (normalizedLink.contains("?")) {
+                    normalizedLink = normalizedLink.substring(0, normalizedLink.indexOf("?"));
+                }
+                while (normalizedLink.endsWith("/")) {
+                    normalizedLink = normalizedLink.substring(0, normalizedLink.length() - 1);
+                }
+                md.update(normalizedLink.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                hasData = true;
+            }
+
+            if (proofImages != null && !proofImages.isEmpty()) {
+                for (String img : proofImages) {
+                    if (img == null || img.isBlank()) continue;
+                    String s = img.trim();
+                    if (s.startsWith("data:") && s.contains(";base64,")) {
+                        s = s.substring(s.indexOf(";base64,") + 8);
+                    }
+                    // Băm một phần nội dung ảnh
+                    byte[] sample = s.substring(0, Math.min(s.length(), 2048)).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    md.update(sample);
+                    hasData = true;
+                }
+            }
+
+            if (!hasData) return null;
+
+            byte[] digest = md.digest();
+            StringBuilder sb = new StringBuilder();
+            for (byte b : digest) {
+                sb.append(String.format("%02x", b));
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            log.warn("[CredentialService] Không thể tính proof hash: {}", e.getMessage());
+            return null;
+        }
+    }
 
     private String serializeImages(java.util.List<String> images) {
         if (images == null || images.isEmpty()) return null;
