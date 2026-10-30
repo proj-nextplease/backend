@@ -26,19 +26,22 @@ public class AiVerificationWorker {
     private final ConfigService configService;
     private final ObjectMapper objectMapper;
     private final CredentialService credentialService;
+    private final NotificationService notificationService;
 
     public AiVerificationWorker(
             NamedParameterJdbcTemplate jdbcTemplate,
             GeminiVerificationService geminiService,
             ConfigService configService,
             ObjectMapper objectMapper,
-            @Lazy CredentialService credentialService
+            @Lazy CredentialService credentialService,
+            NotificationService notificationService
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.geminiService = geminiService;
         this.configService = configService;
         this.objectMapper = objectMapper;
         this.credentialService = credentialService;
+        this.notificationService = notificationService;
     }
 
     /**
@@ -169,9 +172,33 @@ public class AiVerificationWorker {
 
             // Làn Vàng: Giữ PENDING, đẩy Admin quyết định (đã lưu ghi chú AI)
             log.info("[AiWorker] Thuộc LÀN VÀNG (cần Admin duyệt) cho expId={}, score={}", experienceId, result.confidenceScore());
+            UUID ownerUserId = profileOwnerUserId(profileId);
+            if (ownerUserId != null) {
+                String activityName = (String) exp.get("project_name");
+                String reasonMsg = (result.feedback() != null && !result.feedback().isBlank())
+                        ? result.feedback()
+                        : "Hệ thống cần Ban quản trị kiểm tra và đối soát thông tin trực tiếp.";
+                notificationService.notify(
+                        ownerUserId,
+                        "EXPERIENCE_MANUAL_REVIEW",
+                        "Minh chứng đang chờ Ban quản trị duyệt ⏳",
+                        "Minh chứng cho hoạt động \"" + activityName + "\" của bạn đã được chuyển tới Ban quản trị để kiểm tra trực tiếp. Lý do: " + reasonMsg,
+                        "/candidates/dashboard/credentials",
+                        true
+                );
+            }
 
         } catch (Exception e) {
             log.error("[AiWorker] Lỗi khi thực hiện quyết định duyệt/từ chối của AI: {}", e.getMessage(), e);
+        }
+    }
+
+    private UUID profileOwnerUserId(UUID profileId) {
+        try {
+            return jdbcTemplate.queryForObject(
+                    "select user_id from profiles where id = :id", Map.of("id", profileId), UUID.class);
+        } catch (Exception e) {
+            return null;
         }
     }
 

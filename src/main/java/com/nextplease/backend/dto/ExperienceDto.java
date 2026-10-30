@@ -33,6 +33,25 @@ public record ExperienceDto(
 
         Integer expReward,
 
-        Integer rsReward
+        Integer rsReward,
+
+        String verificationStatus
 ) {
+    public ExperienceDto(
+            String id,
+            String title,
+            String organization,
+            String detail,
+            String startDate,
+            String endDate,
+            java.util.List<String> proofImages,
+            String category,
+            String roleLevel,
+            String proofLink,
+            Boolean verified,
+            Integer expReward,
+            Integer rsReward) {
+        this(id, title, organization, detail, startDate, endDate, proofImages, category, roleLevel, proofLink, verified, expReward, rsReward,
+                verified != null && verified ? "APPROVED" : "PENDING");
+    }
 }
