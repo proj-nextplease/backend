@@ -61,6 +61,9 @@ spring:
 
 server:
   port: ${PORT:8080}
+  tomcat:
+    max-http-form-post-size: 50MB
+    max-swallow-size: 50MB
 
 app:
   # Khoá API Careerjet (bản v4). Không có khoá thì endpoint đồng bộ trả 503 và

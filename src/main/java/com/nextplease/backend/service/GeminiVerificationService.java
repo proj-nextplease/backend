@@ -33,15 +33,15 @@ public class GeminiVerificationService {
             ObjectMapper objectMapper,
             @Value("${app.gemini.api-key:}") String apiKey,
             @Value("${app.gemini.model:gemini-3.5-flash-lite}") String model,
-            @Value("${app.gemini.timeout-seconds:45}") int timeoutSeconds
+            @Value("${app.gemini.timeout-seconds:10}") int timeoutSeconds
     ) {
         this.objectMapper = objectMapper;
         this.apiKey = apiKey;
         this.model = model;
-        this.timeoutSeconds = timeoutSeconds;
+        this.timeoutSeconds = Math.min(timeoutSeconds, 10);
         this.httpClient = HttpClient.newBuilder()
                 .followRedirects(HttpClient.Redirect.NORMAL)
-                .connectTimeout(Duration.ofSeconds(10))
+                .connectTimeout(Duration.ofSeconds(4))
                 .build();
     }
 
@@ -304,9 +304,16 @@ public class GeminiVerificationService {
 
             // Trường hợp 2: Link ảnh qua giao thức http/https (hỗ trợ cả link Google Drive công khai)
             String fetchUrl = resolveDirectImageUrl(imageUrl);
+
+            // Bỏ qua ngay các link trang web/mạng xã hội (Facebook, Github, LinkedIn...) để không mất 2-3s tải HTTP vô ích
+            if (isWebPageUrl(fetchUrl)) {
+                log.info("[GeminiVerificationService] Link cung cấp là trang web/mạng xã hội HTML, chuyển sang chế độ đánh giá link ngoài: {}", fetchUrl);
+                return null;
+            }
+
             HttpRequest req = HttpRequest.newBuilder()
                     .uri(URI.create(fetchUrl))
-                    .timeout(Duration.ofSeconds(10))
+                    .timeout(Duration.ofSeconds(4))
                     .header("User-Agent", "Mozilla/5.0")
                     .GET()
                     .build();
@@ -418,6 +425,16 @@ public class GeminiVerificationService {
             log.error("[GeminiVerificationService] Lỗi khi parse JSON từ Gemini: {}", e.getMessage(), e);
             return AiVerificationResult.fallback("Không thể phân tích dữ liệu AI trả về.");
         }
+    }
+
+    private boolean isWebPageUrl(String url) {
+        if (url == null || url.isBlank()) return false;
+        String lower = url.toLowerCase().trim();
+        return lower.contains("facebook.com") || lower.contains("fb.com")
+                || lower.contains("instagram.com") || lower.contains("linkedin.com")
+                || lower.contains("youtube.com") || lower.contains("tiktok.com")
+                || lower.contains("github.com") || lower.contains("twitter.com")
+                || lower.contains("x.com") || lower.endsWith(".html") || lower.endsWith(".htm");
     }
 }
 

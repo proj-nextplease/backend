@@ -214,8 +214,8 @@ public class CredentialService {
         UUID ownerUserId = profileOwnerUserId(profileId);
         notificationService.notify(ownerUserId, "EXPERIENCE_APPROVED",
                 "Kinh nghiệm đã được xác thực ✅",
-                "Kinh nghiệm \"" + exp.get("position") + "\" của bạn đã được duyệt: +" + expPoints + " EXP, +" + rsPoints + " RS.",
-                "/portfolio", true);
+                "Hoạt động \"" + exp.get("project_name") + "\" của bạn đã được duyệt thành công: +" + expPoints + " EXP, +" + rsPoints + " RS.",
+                "/candidates/dashboard/credentials", true);
 
         // Nhiệm vụ tuần "minh chứng được duyệt" chỉ tính khi admin DUYỆT (non-blocking).
         try {
@@ -261,8 +261,8 @@ public class CredentialService {
                 : "";
         notificationService.notify(ownerUserId, "EXPERIENCE_REJECTED",
                 "Kinh nghiệm chưa được duyệt",
-                "Kinh nghiệm \"" + exp.get("position") + "\" của bạn bị từ chối. Lý do: " + reason + refundNote,
-                "/portfolio", true);
+                "Minh chứng cho hoạt động \"" + exp.get("project_name") + "\" của bạn bị từ chối. Lý do: " + reason + refundNote,
+                "/candidates/dashboard/credentials", true);
     }
 
     /**
