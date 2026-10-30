@@ -52,7 +52,7 @@ public class AiVerificationWorker {
         int aiEnabled = configService.getInt("ai_verification_enabled", 1);
         if (aiEnabled == 0 || !geminiService.isConfigured()) {
             log.info("[AiWorker] AI verification đang tắt hoặc chưa cấu hình API key. Bỏ qua expId={}", experienceId);
-            updateAiStatus(experienceId, "SKIPPED", null, null, "Hệ thống AI đang tắt hoặc chưa cấu hình API Key.", null);
+            updateAiStatus(experienceId, "SKIPPED", null, null, "Hồ sơ đã được chuyển tiếp tới Ban quản trị để kiểm tra trực tiếp.", null);
             return;
         }
 
@@ -159,7 +159,9 @@ public class AiVerificationWorker {
                 credentialService.reject(
                         experienceId,
                         AI_SYSTEM_BOT_ID,
-                        "AI từ chối do bằng chứng không hợp lệ: " + result.feedback()
+                        result.feedback() != null && !result.feedback().isBlank()
+                                ? result.feedback()
+                                : "Bằng chứng không hợp lệ hoặc không khớp với thông tin đã khai báo."
                 );
                 setVerifiedByType(experienceId, "AI");
                 return;
