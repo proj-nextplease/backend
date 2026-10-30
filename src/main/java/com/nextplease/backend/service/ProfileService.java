@@ -308,12 +308,14 @@ public class ProfileService {
                         rs.getString("category"),
                         rs.getString("proficiency_level")));
 
-        // 6. Get experiences
+        // 6. Get experiences: Portfolio chỉ hiển thị và quản lý các dự án ĐÃ ĐƯỢC DUYỆT (APPROVED).
+        // Các minh chứng đang chờ duyệt (PENDING) hoặc từ chối (REJECTED) được quản lý riêng tại trang Minh chứng (Credentials).
         List<ExperienceDto> experiences = jdbcTemplate.query(
                 """
                         select id, project_name, position, description, started_at, ended_at, proof_images::text as proof_images,
                                category, role_level, proof_link, verification_status from experiences
                         where profile_id = :profileId
+                          and verification_status = 'APPROVED'
                         order by created_at asc
                         """,
                 Map.of("profileId", profileId), (rs, rowNum) -> new ExperienceDto(
@@ -327,7 +329,7 @@ public class ProfileService {
                         rs.getString("category"),
                         rs.getString("role_level"),
                         rs.getString("proof_link"),
-                        "APPROVED".equals(rs.getString("verification_status")),
+                        true,
                         ExperienceRewards.expFor(rs.getString("category")),
                         ExperienceRewards.rsFor(rs.getString("role_level")),
                         rs.getString("verification_status")));
@@ -1023,17 +1025,8 @@ public class ProfileService {
             }
         }
 
-        // Delete only PENDING rows the user actually removed. Reviewed (APPROVED/
-        // REJECTED) rows are preserved to keep awarded points & history consistent.
-        // Credential-form submissions are never deleted here — they are managed by
-        // the verification flow, not the Portfolio editor.
-        for (Map.Entry<UUID, String> e : existingStatus.entrySet()) {
-            if (!keptIds.contains(e.getKey())
-                    && "PENDING".equals(e.getValue())
-                    && !credentialOwned.contains(e.getKey())) {
-                jdbcTemplate.update("delete from experiences where id = :id", Map.of("id", e.getKey()));
-            }
-        }
+        // Không tự động xoá các dòng PENDING/REJECTED khi lưu Portfolio vì Portfolio chỉ hiển thị và sửa các mục APPROVED.
+        // Các dòng PENDING được bảo lưu cho luồng thẩm định AI / Ban quản trị duyệt đối soát.
     }
 
     private UUID tryParseUuid(String value) {
