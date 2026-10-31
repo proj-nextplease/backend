@@ -31,6 +31,8 @@ public record PortfolioResponse(
         boolean openToWork,
         Map<String, Object> socialLinks,
         /** Phiên bản văn bản pháp lý mà người dùng đã đồng ý; null nếu chưa bao giờ. */
-        String legalConsentVersion
+        String legalConsentVersion,
+        boolean isExported,
+        int exportCount
 ) {
 }

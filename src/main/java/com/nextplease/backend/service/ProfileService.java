@@ -243,7 +243,7 @@ public class ProfileService {
         try {
             profile = jdbcTemplate.queryForMap(
                     """
-                            select id, headline, bio, location, school_id, avatar_config, avatar_url, public_slug, cover_banner_url, cover_banner_pos, credentials, onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked, open_to_work, social_links
+                            select id, headline, bio, location, school_id, avatar_config, avatar_url, public_slug, cover_banner_url, cover_banner_pos, credentials, onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked, open_to_work, social_links, export_count, last_exported_at
                             from profiles where user_id = :userId
                             """,
                     Map.of("userId", userId));
@@ -257,7 +257,7 @@ public class ProfileService {
 
             profile = jdbcTemplate.queryForMap(
                     """
-                            select id, headline, bio, location, school_id, avatar_config, avatar_url, public_slug, cover_banner_url, cover_banner_pos, credentials, onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked, open_to_work, social_links
+                            select id, headline, bio, location, school_id, avatar_config, avatar_url, public_slug, cover_banner_url, cover_banner_pos, credentials, onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked, open_to_work, social_links, export_count, last_exported_at
                             from profiles where user_id = :userId
                             """,
                     Map.of("userId", userId));
@@ -348,6 +348,8 @@ public class ProfileService {
         boolean themeUnlocked = profile.get("theme_unlocked") != null && (Boolean) profile.get("theme_unlocked");
         boolean openToWork = profile.get("open_to_work") != null && (Boolean) profile.get("open_to_work");
         Map<String, Object> socialLinks = parseJsonMap(getJsonString(profile.get("social_links")));
+        int exportCount = profile.get("export_count") != null ? ((Number) profile.get("export_count")).intValue() : 0;
+        boolean isExported = exportCount > 0 && profile.get("last_exported_at") != null;
 
         return new PortfolioResponse(
                 displayName,
@@ -373,7 +375,9 @@ public class ProfileService {
                 themeUnlocked,
                 openToWork,
                 socialLinks,
-                legalConsentService.latestAcceptedVersion(userId));
+                legalConsentService.latestAcceptedVersion(userId),
+                isExported,
+                exportCount);
     }
 
     /**
@@ -1194,14 +1198,24 @@ public class ProfileService {
     }
 
     /**
-     * Deducts portfolio_export_fee_np (1,000 NP / Điểm) from candidate's wallet,
-     * updates last_exported_at, increments export_count, ensures is_public = true,
-     * and returns the public portfolio website URL.
+     * Xuất portfolio thành website công khai.
+     * Lần xuất đầu tiên là MIỄN PHÍ (0 NP); từ lần thứ 2 trở đi mới tính phí cập nhật snapshot (portfolio_export_fee_np, mặc định 1.000 Điểm).
      */
     @Transactional
     public Map<String, Object> exportPortfolioWebsite() {
         UUID userId = currentUserService.getCurrentUser().appUserId();
-        int fee = configService.getInt("portfolio_export_fee_np", 1000);
+
+        // 1. Kiểm tra số lần xuất trước đó: Lần đầu tiên là MIỄN PHÍ (0 NP), từ lần 2 mới trừ điểm
+        Integer exportCount = 0;
+        try {
+            exportCount = jdbcTemplate.queryForObject(
+                    "select coalesce(export_count, 0) from profiles where user_id = :userId",
+                    Map.of("userId", userId), Integer.class);
+        } catch (Exception ignored) {}
+        if (exportCount == null) exportCount = 0;
+
+        boolean isFirstExport = (exportCount == 0);
+        int fee = isFirstExport ? 0 : configService.getInt("portfolio_export_fee_np", 1000);
 
         // Lock wallet
         Map<String, Object> wallet;
@@ -1214,34 +1228,36 @@ public class ProfileService {
         }
 
         int currentBalance = ((Number) wallet.get("np_balance")).intValue();
-        if (currentBalance < fee) {
+        if (fee > 0 && currentBalance < fee) {
             throw new AppException(HttpStatus.PAYMENT_REQUIRED,
                     String.format(
-                            "Số dư Điểm không đủ để xuất website. Cần %,d Điểm, hiện tại bạn có %,d Điểm. Vui lòng nạp thêm.",
+                            "Số dư Điểm không đủ để cập nhật website. Cần %,d Điểm, hiện tại bạn có %,d Điểm. Vui lòng nạp thêm.",
                             fee, currentBalance),
                     "INSUFFICIENT_NP");
         }
 
-        int balanceAfter = currentBalance - fee;
+        int balanceAfter = fee > 0 ? (currentBalance - fee) : currentBalance;
         UUID walletId = (UUID) wallet.get("id");
 
-        jdbcTemplate.update("""
-                update wallets
-                set np_balance = :balanceAfter, updated_at = now()
-                where id = :walletId
-                """, Map.of("balanceAfter", balanceAfter, "walletId", walletId));
+        if (fee > 0) {
+            jdbcTemplate.update("""
+                    update wallets
+                    set np_balance = :balanceAfter, updated_at = now()
+                    where id = :walletId
+                    """, Map.of("balanceAfter", balanceAfter, "walletId", walletId));
 
-        jdbcTemplate.update("""
-                insert into wallet_transactions (
-                    wallet_id, amount_np, balance_after_np, transaction_type, reason
-                ) values (
-                    :walletId, :amount, :balanceAfter, 'PORTFOLIO_EXPORT_FEE', :reason
-                )
-                """, Map.of(
-                "walletId", walletId,
-                "amount", -fee,
-                "balanceAfter", balanceAfter,
-                "reason", "Phí xuất Portfolio thành website công khai"));
+            jdbcTemplate.update("""
+                    insert into wallet_transactions (
+                        wallet_id, amount_np, balance_after_np, transaction_type, reason
+                    ) values (
+                        :walletId, :amount, :balanceAfter, 'PORTFOLIO_EXPORT_FEE', :reason
+                    )
+                    """, Map.of(
+                    "walletId", walletId,
+                    "amount", -fee,
+                    "balanceAfter", balanceAfter,
+                    "reason", "Phí cập nhật snapshot Portfolio website công khai"));
+        }
 
         // Update profile
         jdbcTemplate.update("""
@@ -1266,13 +1282,20 @@ public class ProfileService {
                 ? "/p/" + publicSlug
                 : "/portfolio/view/" + userId;
 
-        log.info("[ProfileService] User {} exported portfolio website (fee={}, url={})", userId, fee, publicUrl);
+        log.info("[ProfileService] User {} exported portfolio website (isFirstExport={}, fee={}, url={})",
+                userId, isFirstExport, fee, publicUrl);
 
         return Map.of(
                 "success", true,
+                "isFirstExport", isFirstExport,
+                "exportCount", exportCount + 1,
                 "feeDeducted", fee,
+                "balanceAfter", balanceAfter,
                 "publicUrl", publicUrl,
+                "publicSlug", publicSlug != null ? publicSlug : "",
                 "exportedAt", java.time.OffsetDateTime.now().toString(),
-                "message", "Xuất Portfolio thành website thành công!");
+                "message", isFirstExport
+                        ? "Chúc mừng! Bạn đã xuất bản Website Portfolio lần đầu hoàn toàn miễn phí!"
+                        : "Cập nhật snapshot Website Portfolio thành công!");
     }
 }

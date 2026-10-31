@@ -830,7 +830,7 @@ public class QuestService {
                         (wallet_id, amount_np, balance_after_np, transaction_type, reason,
                          source_type, source_id, idempotency_key)
                     values
-                        (:walletId, :amount, :balanceAfter, 'QUEST_REWARD',
+                        (:walletId, :amount, :balanceAfter, 'REWARD',
                          :reason, 'quest_application', :sourceId, :ikey)
                     on conflict (idempotency_key) do nothing
                     """, new MapSqlParameterSource()
