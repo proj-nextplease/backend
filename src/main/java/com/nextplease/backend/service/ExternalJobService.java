@@ -68,8 +68,8 @@ public class ExternalJobService {
     private static final long CACHE_TTL_MS = java.time.Duration.ofMinutes(15).toMillis();
 
     /**
-     * Danh sách duy nhất 10 tin tuyển dụng Marketing đã tuyển chọn từ Excel.
-     * Mọi tin khác ngoài 10 tin này đều bị loại bỏ khỏi danh sách hiển thị.
+     * Danh sách các tin tuyển dụng Marketing đã tuyển chọn từ Excel.
+     * Đã loại bỏ hoàn toàn 2 tin: TP SOLAR (Booking PR) và NEOTECH (Nhân viên Marketing).
      */
     public static final Set<String> CURATED_SOURCE_KEYS = Set.of(
             "fe72a74b03e6f3749db0d6d7abbfb1a8a1235bd4164bea4f97bae5ef24f46401",
@@ -80,8 +80,7 @@ public class ExternalJobService {
             "259e1bcb3103938d07cd24ab156f92968938d013a2d5cf0009de83c6ef66a1b4",
             "fca1ce4adbbc64c08af33c88e9811db83c0ccfadc0c285a8c6e245b317a2e880",
             "ab8bee80267d61b537b30a1f7f88756e4a144dac600816c70087d75bfa8e35ef",
-            "90ae975f6167a7e91d9b68c87d1ab761d18b49c6853930ab174686a40c562eb8",
-            "4ee70c05adbe1c2656f8a350ba3fa9fad4bfefcf2d38c22beca0b14aab2e3e16"
+            "90ae975f6167a7e91d9b68c87d1ab761d18b49c6853930ab174686a40c562eb8"
     );
 
     public ExternalJobService(NamedParameterJdbcTemplate jdbcTemplate,
@@ -120,6 +119,10 @@ public class ExternalJobService {
                     from external_jobs
                     where is_active
                       and source_key in (:curatedKeys)
+                      and source_key != '4ee70c05adbe1c2656f8a350ba3fa9fad4bfefcf2d38c22beca0b14aab2e3e16'
+                      and lower(coalesce(company_name, '')) not like '%tp solar%'
+                      and lower(coalesce(company_name, '')) not like '%neotech%'
+                      and lower(title) not like '%booking pr%'
                       and (:q::text is null or title ilike '%' || :q || '%'
                                             or company_name ilike '%' || :q || '%')
                       and (:loc::text is null or location ilike '%' || :loc || '%')
