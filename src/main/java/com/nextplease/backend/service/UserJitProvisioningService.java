@@ -81,6 +81,7 @@ public class UserJitProvisioningService {
         jdbcTemplate.update("""
                 insert into wallets (user_id, np_balance, locked_np_balance)
                 values (:userId, 0, 0)
+                on conflict (user_id) do nothing
                 """, Map.of("userId", userId));
 
         jdbcTemplate.update("""

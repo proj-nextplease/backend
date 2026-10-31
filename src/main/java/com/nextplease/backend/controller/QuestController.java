@@ -2,6 +2,7 @@ package com.nextplease.backend.controller;
 
 import com.nextplease.backend.dto.response.ApiResponse;
 import com.nextplease.backend.service.CurrentUserService;
+import com.nextplease.backend.service.JobService;
 import com.nextplease.backend.service.QuestService;
 import java.util.List;
 import java.util.Map;
@@ -23,13 +24,21 @@ public class QuestController {
 
     private final QuestService questService;
     private final CurrentUserService currentUserService;
+    private final JobService jobService;
 
-    public QuestController(QuestService questService, CurrentUserService currentUserService) {
+    public QuestController(QuestService questService, CurrentUserService currentUserService, JobService jobService) {
         this.questService = questService;
         this.currentUserService = currentUserService;
+        this.jobService = jobService;
     }
 
     // ── Public / Candidate ────────────────────────────────────────────────────
+
+    /** GET /api/v1/quests/{id} — get details for a single quest */
+    @GetMapping("/quests/{id}")
+    public ApiResponse<Map<String, Object>> getQuestDetails(@PathVariable UUID id) {
+        return ApiResponse.success(jobService.getJobDetails(id));
+    }
 
     /** GET /api/v1/quests?keyword=&category=&companyId= */
     @GetMapping("/quests")
