@@ -17,6 +17,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -66,6 +67,23 @@ public class ExternalJobService {
     /** Trong khoảng này thì phục vụ từ DB, không gọi lại API. */
     private static final long CACHE_TTL_MS = java.time.Duration.ofMinutes(15).toMillis();
 
+    /**
+     * Danh sách duy nhất 10 tin tuyển dụng Marketing đã tuyển chọn từ Excel.
+     * Mọi tin khác ngoài 10 tin này đều bị loại bỏ khỏi danh sách hiển thị.
+     */
+    public static final Set<String> CURATED_SOURCE_KEYS = Set.of(
+            "fe72a74b03e6f3749db0d6d7abbfb1a8a1235bd4164bea4f97bae5ef24f46401",
+            "4c93146e091ef37247fd06d837bd6cde2aa6daab96ffcdd888865697cadddf96",
+            "2ce1aff3175a1ad48eb759f6124870cd1df005e8beb50ff7da13fe8e3efd3b27",
+            "323bf4cbd983e5fd80b85929428a9fa5874da924b90ca88739a8d7ebb0f8bf74",
+            "5a44a56939eb719c7efc9063479110dfbebddc620c9f9810c72df809ebc90f0e",
+            "259e1bcb3103938d07cd24ab156f92968938d013a2d5cf0009de83c6ef66a1b4",
+            "fca1ce4adbbc64c08af33c88e9811db83c0ccfadc0c285a8c6e245b317a2e880",
+            "ab8bee80267d61b537b30a1f7f88756e4a144dac600816c70087d75bfa8e35ef",
+            "90ae975f6167a7e91d9b68c87d1ab761d18b49c6853930ab174686a40c562eb8",
+            "4ee70c05adbe1c2656f8a350ba3fa9fad4bfefcf2d38c22beca0b14aab2e3e16"
+    );
+
     public ExternalJobService(NamedParameterJdbcTemplate jdbcTemplate,
                               @Value("${app.careerjet.api-key:}") String apiKey) {
         this.jdbcTemplate = jdbcTemplate;
@@ -81,14 +99,7 @@ public class ExternalJobService {
     public List<Map<String, Object>> list(String q, String location, int limit) {
         int capped = Math.max(1, Math.min(limit, 100));
         /* DISTINCT ON de gop tin trung.
-         *
-         * Careerjet tong hop tu nhieu trang nguon, nen CUNG mot viec tra ve
-         * nhieu lan, moi lan mot link theo doi khac nhau. Khoa sha256(url) coi
-         * chung la cac tin rieng biet — do duoc 13 cap trung trong 50 tin, co
-         * tin lap 4 lan. Khong gop thi danh sach nhin nhu loi.
-         *
-         * Gop luc DOC chu khong luc ghi: giu nguyen moi ban trong DB thi sau
-         * nay doi tieu chi gop khong phai keo lai du lieu.
+         * Chi lay cac tin nam trong CURATED_SOURCE_KEYS (10 tin Marketing).
          */
         return jdbcTemplate.queryForList("""
                 select * from (
@@ -108,17 +119,17 @@ public class ExternalJobService {
                            source
                     from external_jobs
                     where is_active
+                      and source_key in (:curatedKeys)
                       and (:q::text is null or title ilike '%' || :q || '%'
                                             or company_name ilike '%' || :q || '%')
                       and (:loc::text is null or location ilike '%' || :loc || '%')
-                    -- DISTINCT ON giu HANG DAU TIEN cua moi nhom, nen thu tu o
-                    -- day quyet dinh ban nao duoc giu: ban moi nhat.
                     order by lower(title), lower(coalesce(company_name, '')),
                              posted_at desc nulls last, last_seen_at desc
                 ) t
                 order by "postedAt" desc nulls last, "lastSeenAt" desc
                 limit :limit
                 """, new MapSqlParameterSource()
+                .addValue("curatedKeys", CURATED_SOURCE_KEYS)
                 .addValue("q", blankToNull(q))
                 .addValue("loc", blankToNull(location))
                 .addValue("limit", capped));
@@ -126,61 +137,21 @@ public class ExternalJobService {
 
     public Map<String, Object> stats() {
         return jdbcTemplate.queryForMap("""
-                select count(*) filter (where is_active)            as "activeCount",
-                       count(*)                                     as "totalCount",
-                       max(last_seen_at)                            as "lastSyncedAt",
-                       count(distinct company_name) filter (where is_active) as "companyCount"
+                select count(*) filter (where is_active and source_key in (:curatedKeys)) as "activeCount",
+                       count(*) filter (where source_key in (:curatedKeys))               as "totalCount",
+                       max(last_seen_at) filter (where source_key in (:curatedKeys))       as "lastSyncedAt",
+                       count(distinct company_name) filter (where is_active and source_key in (:curatedKeys)) as "companyCount"
                 from external_jobs
-                """, new MapSqlParameterSource());
+                """, new MapSqlParameterSource("curatedKeys", CURATED_SOURCE_KEYS));
     }
 
     /**
-     * Đường đi chính: người dùng mở tab Việc làm thì gọi thẳng Careerjet bằng
-     * IP và user-agent của CHÍNH họ.
-     *
-     * Careerjet bắt buộc hai tham số đó, tức API được thiết kế để gọi theo
-     * từng người dùng ngay lúc họ tìm việc. Kéo hàng loạt bằng tài khoản admin
-     * rồi phục vụ lại bản lưu là đi ngược ý đồ đó.
-     *
-     * Ba lớp bảo vệ, theo thứ tự:
-     *   1. Vừa gọi cho truy vấn này dưới 15 phút → lấy từ DB, khỏi gọi lại.
-     *   2. Gọi API, ghi kết quả vào DB rồi trả về.
-     *   3. API lỗi hoặc hết quota → trả dữ liệu đã lưu thay vì để trống.
+     * Đường đi chính: người dùng mở tab Việc làm nguồn ngoài.
+     * Chỉ phục vụ đúng 10 tin tuyển dụng Marketing đã tuyển chọn từ Excel,
+     * không tự động gọi API Careerjet kéo thêm tin rác vào hệ thống.
      */
     public List<Map<String, Object>> search(String q, String location, int limit,
                                             String callerIp, String userAgent) {
-        if (!isConfigured()) {
-            return list(q, location, limit);
-        }
-        String cacheKey = (q == null ? "" : q.trim().toLowerCase(Locale.ROOT))
-                + "|" + (location == null ? "" : location.trim().toLowerCase(Locale.ROOT));
-        Long last = lastFetchedAt.get(cacheKey);
-        if (last != null && System.currentTimeMillis() - last < CACHE_TTL_MS) {
-            return list(q, location, limit);
-        }
-
-        try {
-            JsonNode root = callApi(q, location, 1, callerIp, userAgent);
-            if ("JOBS".equals(root.path("type").asText(""))) {
-                JsonNode jobs = root.path("jobs");
-                if (jobs.isArray()) {
-                    for (JsonNode job : jobs) {
-                        String applyUrl = job.path("url").asText("");
-                        if (!applyUrl.isBlank()) upsert(job, applyUrl);
-                    }
-                }
-                lastFetchedAt.put(cacheKey, System.currentTimeMillis());
-            } else {
-                // type=LOCATIONS: địa điểm mơ hồ. Không phải lỗi hệ thống, và
-                // người đang tìm việc không sửa được gì — cứ trả dữ liệu đã có.
-                log.info("Careerjet không khớp địa điểm '{}': {}", location,
-                        root.path("message").asText(""));
-            }
-        } catch (Exception e) {
-            // Cố ý KHÔNG ném lên: đây là phần bổ sung của trang việc làm. Hỏng
-            // thì rơi về dữ liệu đã lưu, người dùng vẫn thấy nội dung.
-            log.warn("Gọi Careerjet thất bại, dùng dữ liệu đã lưu: {}", e.getMessage());
-        }
         return list(q, location, limit);
     }
 
@@ -230,15 +201,18 @@ public class ExternalJobService {
         return Map.of("inserted", inserted, "updated", updated, "skipped", skipped);
     }
 
-    /** Ẩn tin không còn thấy ở nguồn sau {days} ngày. Cũng là cách dọn link chết. */
+    /** Ẩn tin không còn thấy ở nguồn sau {days} ngày. Không áp dụng với 10 tin Marketing tuyển chọn. */
     public int deactivateStale(int days) {
         int d = Math.max(1, Math.min(days, 365));
         return jdbcTemplate.update("""
                 update external_jobs
                    set is_active = false
                  where is_active
+                   and source_key not in (:curatedKeys)
                    and last_seen_at < now() - make_interval(days => :days)
-                """, new MapSqlParameterSource().addValue("days", d));
+                """, new MapSqlParameterSource()
+                .addValue("curatedKeys", CURATED_SOURCE_KEYS)
+                .addValue("days", d));
     }
 
     /* ─────────────────────────── nội bộ ─────────────────────────── */
