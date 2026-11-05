@@ -1,6 +1,7 @@
 package com.nextplease.backend.controller;
 
 import com.nextplease.backend.dto.request.DeactivateAccountRequest;
+import com.nextplease.backend.dto.request.DeleteAccountRequest;
 import com.nextplease.backend.dto.request.UpdateDisplayNameRequest;
 import com.nextplease.backend.dto.request.UpdateNotificationPreferencesRequest;
 import com.nextplease.backend.dto.request.UpdatePrivacySettingsRequest;
@@ -59,6 +60,13 @@ public class AccountSettingsController {
     public ApiResponse<String> deactivateAccount(@Valid @RequestBody DeactivateAccountRequest request, HttpServletRequest httpRequest) {
         accountSettingsService.deactivateAccount(request.password(), extractBearerToken(httpRequest));
         return ApiResponse.success("Tài khoản đã được vô hiệu hóa.");
+    }
+
+    /** Xoá hẳn tài khoản của chính mình (chính sách xoá tài khoản của Google Play). */
+    @PostMapping("/delete")
+    public ApiResponse<String> deleteAccount(@Valid @RequestBody DeleteAccountRequest request) {
+        accountSettingsService.deleteOwnAccount(request.confirmEmail());
+        return ApiResponse.success("Tài khoản của bạn đã được xoá.");
     }
 
     private String extractBearerToken(HttpServletRequest httpRequest) {

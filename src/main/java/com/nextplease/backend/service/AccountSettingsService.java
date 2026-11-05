@@ -204,4 +204,69 @@ public class AccountSettingsService {
 
         supabaseAdminService.signOutUser(callerAccessToken);
     }
+
+    /**
+     * Người dùng TỰ XOÁ tài khoản — bắt buộc theo chính sách Google Play
+     * (ứng dụng cho tạo tài khoản thì phải cho xoá ngay trong ứng dụng).
+     *
+     * Khác {@link #deactivateAccount}: đây là xoá thật, không mở lại được.
+     *   - Xoá hồ sơ (profiles) — kéo theo kinh nghiệm, kỹ năng, minh chứng,
+     *     tiến độ nhiệm vụ… vì mọi bảng con đều ON DELETE CASCADE.
+     *   - Ẩn danh dòng app_users: email đổi thành địa chỉ giả để email thật
+     *     đăng ký lại được (cột email là UNIQUE), tên thành "Người dùng đã xoá".
+     *     Dòng này GIỮ LẠI vì đơn ứng tuyển, giao dịch ví, bài thảo luận…
+     *     đang trỏ tới nó; xoá hẳn sẽ phá lịch sử của tổ chức và sổ sách.
+     *   - Xoá tài khoản đăng nhập trên Supabase, nên không đăng nhập lại được.
+     *
+     * Chặn admin và người đang làm chủ tổ chức — cùng lý do như
+     * AdminDashboardController#deleteUser.
+     */
+    @Transactional
+    public void deleteOwnAccount(String confirmEmail) {
+        MeResponse currentUser = currentUserService.getCurrentUser();
+        java.util.UUID userId = currentUser.appUserId();
+
+        if (confirmEmail == null || currentUser.email() == null
+                || !confirmEmail.trim().equalsIgnoreCase(currentUser.email().trim())) {
+            throw new AppException(HttpStatus.BAD_REQUEST, "Email xác nhận không khớp với email đăng nhập.");
+        }
+        if (currentUser.roles() != null && currentUser.roles().contains("admin")) {
+            throw new AppException(HttpStatus.FORBIDDEN, "Tài khoản quản trị viên không tự xoá được.");
+        }
+        Integer ownsCompanies = jdbcTemplate.queryForObject(
+                "select count(*) from companies where owner_user_id = :id", Map.of("id", userId), Integer.class);
+        if (ownsCompanies != null && ownsCompanies > 0) {
+            throw new AppException(HttpStatus.CONFLICT,
+                    "Bạn đang là chủ sở hữu một tổ chức. Hãy chuyển quyền sở hữu trước khi xoá tài khoản.");
+        }
+
+        jdbcTemplate.update("""
+                update authority_nodes set status = 'REJECTED', deleted_at = now(), updated_at = now()
+                where user_id = :id and status <> 'REJECTED' and deleted_at is null
+                """, Map.of("id", userId));
+
+        jdbcTemplate.update("delete from profiles where user_id = :id", Map.of("id", userId));
+
+        jdbcTemplate.update("""
+                update app_users
+                set status = 'DELETED',
+                    deleted_at = now(),
+                    email = 'deleted-' || id::text || '@deleted.fonlio.online',
+                    display_name = 'Người dùng đã xoá',
+                    updated_at = now()
+                where id = :id
+                """, Map.of("id", userId));
+
+        jdbcTemplate.update("""
+                insert into audit_logs (actor_user_id, action, entity_type, entity_id, metadata)
+                values (:id, 'account.deleted_by_user', 'app_user', :id, '{}'::jsonb)
+                """, Map.of("id", userId));
+
+        // Gọi Supabase SAU CÙNG: nếu một câu SQL ở trên hỏng thì giao dịch
+        // huỷ và người dùng vẫn còn đăng nhập được để thử lại, thay vì mất
+        // tài khoản đăng nhập mà dữ liệu thì vẫn nằm đó.
+        if (currentUser.supabaseUserId() != null) {
+            supabaseAdminService.deleteUser(currentUser.supabaseUserId());
+        }
+    }
 }
