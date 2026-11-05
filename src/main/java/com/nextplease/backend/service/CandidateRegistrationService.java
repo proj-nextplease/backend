@@ -280,7 +280,7 @@ public class CandidateRegistrationService {
                     :userId,
                     jsonb_build_object(
                         'registration_id', :registrationId,
-                        'student_email', :studentEmail,
+                        'student_email', cast(:studentEmail as text),
                         'role', :roleCode
                     )
                 )
