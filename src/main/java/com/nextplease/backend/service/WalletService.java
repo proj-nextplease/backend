@@ -93,6 +93,9 @@ public class WalletService {
         result.put("portfolioExportFeeNp", configService.getInt("portfolio_export_fee_np", 1000));
         result.put("defaultTopupPackageNp", configService.getInt("default_topup_package_np", 39000));
         result.put("topupSuggestions", List.of(39000, 69000, 99000, 199000));
+        // Gắn vào giao dịch Google Play (obfuscatedAccountId) để backend kiểm
+        // giao dịch đó đúng là do chính người này mua.
+        result.put("playAccountTag", playAccountTag(userId));
         return result;
     }
 
@@ -328,6 +331,111 @@ public class WalletService {
         } catch (org.springframework.dao.EmptyResultDataAccessException e) {
             throw new AppException(HttpStatus.NOT_FOUND, "Khong tim thay yeu cau nap tien nay.");
         }
+    }
+
+    /* ─────────────────── Nạp tiền qua Google Play Billing ─────────────────── */
+
+    /**
+     * Mã định danh ẩn danh của người dùng gửi kèm giao dịch Google Play.
+     *
+     * Google cấm gửi thông tin cá nhân vào obfuscatedAccountId, và giới hạn 64
+     * ký tự — SHA-256 hex của id nội bộ vừa đúng 64 ký tự và không lộ gì.
+     */
+    public static String playAccountTag(UUID userId) {
+        return sha256Hex("fonlio-play:" + userId);
+    }
+
+    public static String sha256Hex(String s) {
+        try {
+            byte[] d = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(s.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return java.util.HexFormat.of().formatHex(d);
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /**
+     * Cộng NP cho một giao dịch Google Play ĐÃ được xác minh với Google.
+     *
+     * Chống cộng trùng ở tầng CSDL: provider_transaction_id = SHA-256 của
+     * purchaseToken, có unique index. `on conflict do nothing` khiến lần gửi
+     * thứ hai (app gửi lại sau khi mất mạng, hoặc hai request song song) không
+     * chèn được dòng nào, và mình dừng trước khi đụng vào ví.
+     *
+     * @return credited = true nếu lần này thật sự cộng tiền
+     */
+    @Transactional
+    public Map<String, Object> creditFromGooglePlay(UUID userId, String productId, int amountNp,
+                                                    String tokenHash, String orderId, boolean testPurchase) {
+        String metadata;
+        try {
+            metadata = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(Map.of(
+                    "productId", productId,
+                    "orderId", orderId == null ? "" : orderId,
+                    "testPurchase", testPurchase));
+        } catch (Exception e) {
+            metadata = "{}";
+        }
+
+        List<UUID> inserted = jdbcTemplate.queryForList("""
+                insert into payment_requests
+                    (user_id, amount_vnd, amount_np, transfer_content, provider, status,
+                     provider_transaction_id, paid_at, metadata)
+                values
+                    (:userId, :amount, :amount, 'GOOGLE_PLAY', 'GOOGLE_PLAY', 'PAID',
+                     :txn, now(), cast(:metadata as jsonb))
+                on conflict (provider_transaction_id) where provider_transaction_id is not null
+                do nothing
+                returning id
+                """, new MapSqlParameterSource()
+                .addValue("userId", userId)
+                .addValue("amount", amountNp)
+                .addValue("txn", tokenHash)
+                .addValue("metadata", metadata), UUID.class);
+
+        if (inserted.isEmpty()) {
+            UUID owner = jdbcTemplate.queryForObject(
+                    "select user_id from payment_requests where provider_transaction_id = :txn",
+                    Map.of("txn", tokenHash), UUID.class);
+            if (!userId.equals(owner)) {
+                log.warn("[GooglePlay] User {} gửi token đã được cộng cho user {}", userId, owner);
+                throw new AppException(HttpStatus.CONFLICT,
+                        "Giao dịch này đã được ghi nhận cho một tài khoản khác.");
+            }
+            Map<String, Object> wallet = fetchWalletOrThrow(userId);
+            return Map.of("credited", false, "amountNp", amountNp,
+                    "balanceAfter", wallet.get("np_balance"));
+        }
+
+        UUID paymentId = inserted.get(0);
+        Map<String, Object> wallet = lockWalletOrThrow(userId);
+        int balanceAfter = ((Number) wallet.get("np_balance")).intValue() + amountNp;
+
+        jdbcTemplate.update("""
+                update wallets set np_balance = :balance, updated_at = now()
+                where id = :walletId
+                """, Map.of("walletId", wallet.get("id"), "balance", balanceAfter));
+
+        jdbcTemplate.update("""
+                insert into wallet_transactions
+                    (wallet_id, amount_np, balance_after_np, transaction_type, reason,
+                     source_type, source_id, idempotency_key)
+                values
+                    (:walletId, :amount, :balanceAfter, 'TOPUP', :reason,
+                     'payment_request', :paymentId, :ikey)
+                """, new MapSqlParameterSource()
+                .addValue("walletId", wallet.get("id"))
+                .addValue("amount", amountNp)
+                .addValue("balanceAfter", balanceAfter)
+                .addValue("reason", String.format("Nạp %,d NP qua Google Play%s",
+                        amountNp, testPurchase ? " (thử nghiệm)" : ""))
+                .addValue("paymentId", paymentId)
+                .addValue("ikey", "gplay_" + tokenHash));
+
+        log.info("[GooglePlay] Cộng {} NP cho user {} → số dư {} (order {}{})",
+                amountNp, userId, balanceAfter, orderId, testPurchase ? ", test" : "");
+        return Map.of("credited", true, "amountNp", amountNp, "balanceAfter", balanceAfter);
     }
 
     private void validateTopUpAmount(int amountVnd) {

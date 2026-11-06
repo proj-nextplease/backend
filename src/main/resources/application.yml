@@ -80,6 +80,15 @@ app:
     client-id: ${PAYOS_CLIENT_ID:}
     api-key: ${PAYOS_API_KEY:}
     checksum-key: ${PAYOS_CHECKSUM_KEY:}
+  google-play:
+    # Nạp NP trong app Android qua Google Play Billing. Backend hỏi lại Google
+    # (Android Publisher API) xem giao dịch có thật rồi mới cộng NP.
+    # Thiếu service account thì endpoint xác minh trả 503 — KHÔNG có đường nào
+    # cộng tiền khi chưa cấu hình.
+    package-name: ${GOOGLE_PLAY_PACKAGE_NAME:online.fonlio.app}
+    # Nội dung file JSON khoá của service account, dán nguyên văn hoặc mã hoá
+    # base64 (tiện cho biến môi trường một dòng trên Railway).
+    service-account-json: ${GOOGLE_PLAY_SERVICE_ACCOUNT_JSON:}
   waitlist:
     # Token để Google Apps Script kéo danh sách waitlist về Google Sheet.
     # RỖNG = endpoint xuất TẮT HẲN (trả 404). Đây là dữ liệu cá nhân — tên,

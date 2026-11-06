@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.nextplease.backend.dto.response.ApiResponse;
 import com.nextplease.backend.exception.AppException;
 import com.nextplease.backend.service.CurrentUserService;
+import com.nextplease.backend.service.GooglePlayService;
 import com.nextplease.backend.service.PayOsService;
 import com.nextplease.backend.service.WalletService;
 import java.util.Map;
@@ -17,7 +18,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-/** Nạp tiền thật qua PayOS. */
+/** Nạp tiền thật: PayOS (web) và Google Play Billing (app Android). */
 @RestController
 @RequestMapping("/api/v1/payments")
 public class PaymentController {
@@ -25,14 +26,71 @@ public class PaymentController {
     private static final Logger log = LoggerFactory.getLogger(PaymentController.class);
 
     private final PayOsService payOsService;
+    private final GooglePlayService googlePlayService;
     private final WalletService walletService;
     private final CurrentUserService currentUserService;
 
-    public PaymentController(PayOsService payOsService, WalletService walletService,
-                             CurrentUserService currentUserService) {
+    public PaymentController(PayOsService payOsService, GooglePlayService googlePlayService,
+                             WalletService walletService, CurrentUserService currentUserService) {
         this.payOsService = payOsService;
+        this.googlePlayService = googlePlayService;
         this.walletService = walletService;
         this.currentUserService = currentUserService;
+    }
+
+    /**
+     * App Android gửi giao dịch Google Play vừa mua xong để được cộng NP.
+     *
+     * Không tin gì từ app ngoài productId và purchaseToken: số NP lấy từ bảng
+     * giá phía server, trạng thái đã trả lấy từ máy chủ Google. Gọi lại nhiều
+     * lần với cùng token là an toàn — chỉ lần đầu cộng tiền.
+     */
+    @PostMapping("/google-play/verify")
+    public ApiResponse<Map<String, Object>> verifyGooglePlay(@RequestBody Map<String, Object> body) {
+        UUID userId = currentUserService.getCurrentUser().appUserId();
+        String productId = String.valueOf(body.getOrDefault("productId", "")).trim();
+        String purchaseToken = String.valueOf(body.getOrDefault("purchaseToken", "")).trim();
+
+        Integer amountNp = GooglePlayService.PRODUCTS.get(productId);
+        if (amountNp == null) {
+            throw new AppException(HttpStatus.BAD_REQUEST, "Gói NP không tồn tại.");
+        }
+        if (purchaseToken.isEmpty() || purchaseToken.length() > 4096) {
+            throw new AppException(HttpStatus.BAD_REQUEST, "Thiếu mã giao dịch.");
+        }
+
+        GooglePlayService.ProductPurchase purchase =
+                googlePlayService.getProductPurchase(productId, purchaseToken);
+
+        if (purchase.purchaseState() == 2) {
+            // Người dùng chọn hình thức trả sau (ví dụ tiền mặt ở cửa hàng).
+            // Chưa có tiền thì chưa cộng; app sẽ gửi lại khi Google báo xong.
+            return ApiResponse.success(Map.of("credited", false, "pending", true));
+        }
+        if (purchase.purchaseState() != 0) {
+            throw new AppException(HttpStatus.BAD_REQUEST, "Giao dịch đã bị huỷ hoặc hoàn tiền.");
+        }
+        String expectedTag = WalletService.playAccountTag(userId);
+        if (!purchase.obfuscatedAccountId().isEmpty()
+                && !purchase.obfuscatedAccountId().equals(expectedTag)) {
+            log.warn("[GooglePlay] User {} gửi giao dịch của tài khoản khác (order {})",
+                    userId, purchase.orderId());
+            throw new AppException(HttpStatus.FORBIDDEN, "Giao dịch không thuộc tài khoản này.");
+        }
+
+        Map<String, Object> result = walletService.creditFromGooglePlay(
+                userId, productId, amountNp, WalletService.sha256Hex(purchaseToken),
+                purchase.orderId(), purchase.testPurchase());
+
+        // Consume SAU khi đã cộng (transaction đã commit). Lỗi ở đây không mất
+        // tiền của ai: app gửi lại token, nhánh "đã cộng" trả về và thử lại.
+        if (purchase.consumptionState() == 0) {
+            googlePlayService.consume(productId, purchaseToken);
+        }
+
+        Map<String, Object> out = new java.util.LinkedHashMap<>(result);
+        out.put("pending", false);
+        return ApiResponse.success(out);
     }
 
     /** Tạo link thanh toán. Chưa cộng NP — tiền chỉ vào ví khi webhook xác nhận. */
