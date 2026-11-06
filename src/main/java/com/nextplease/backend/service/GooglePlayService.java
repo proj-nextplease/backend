@@ -67,7 +67,7 @@ public class GooglePlayService {
     private Instant accessTokenExpiresAt = Instant.EPOCH;
 
     public GooglePlayService(
-            @Value("${app.google-play.package-name:online.fonlio.app}") String packageName,
+            @Value("${app.google-play.package-name:online.fonlio.ap}") String packageName,
             @Value("${app.google-play.service-account-json:}") String serviceAccountJson) {
         this.packageName = packageName == null ? "" : packageName.trim();
 

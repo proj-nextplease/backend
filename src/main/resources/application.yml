@@ -85,7 +85,7 @@ app:
     # (Android Publisher API) xem giao dịch có thật rồi mới cộng NP.
     # Thiếu service account thì endpoint xác minh trả 503 — KHÔNG có đường nào
     # cộng tiền khi chưa cấu hình.
-    package-name: ${GOOGLE_PLAY_PACKAGE_NAME:online.fonlio.app}
+    package-name: ${GOOGLE_PLAY_PACKAGE_NAME:online.fonlio.ap}
     # Nội dung file JSON khoá của service account, dán nguyên văn hoặc mã hoá
     # base64 (tiện cho biến môi trường một dòng trên Railway).
     service-account-json: ${GOOGLE_PLAY_SERVICE_ACCOUNT_JSON:}
