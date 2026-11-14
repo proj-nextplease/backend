@@ -47,6 +47,8 @@ public class ProfileService {
     private final AiVerificationWorker aiVerificationWorker;
     private final boolean jwtEnabled;
 
+    private final AmbassadorService ambassadorService;
+
     public ProfileService(
             NamedParameterJdbcTemplate jdbcTemplate,
             ObjectMapper objectMapper,
@@ -55,6 +57,7 @@ public class ProfileService {
             UserJitProvisioningService userJitProvisioningService,
             CurrentUserService currentUserService,
             LegalConsentService legalConsentService,
+            AmbassadorService ambassadorService,
             @org.springframework.beans.factory.annotation.Autowired(required = false) AiVerificationWorker aiVerificationWorker,
             @Value("${app.security.jwt.enabled:false}") boolean jwtEnabled) {
         this.jdbcTemplate = jdbcTemplate;
@@ -64,6 +67,7 @@ public class ProfileService {
         this.userJitProvisioningService = userJitProvisioningService;
         this.currentUserService = currentUserService;
         this.legalConsentService = legalConsentService;
+        this.ambassadorService = ambassadorService;
         this.aiVerificationWorker = aiVerificationWorker;
         this.jwtEnabled = jwtEnabled;
     }
@@ -1216,6 +1220,8 @@ public class ProfileService {
 
         boolean isFirstExport = (exportCount == 0);
         int fee = isFirstExport ? 0 : configService.getInt("portfolio_export_fee_np", 1000);
+        // Đại sứ thương hiệu: 0 NP (xem AmbassadorService).
+        fee = ambassadorService.waiveFee(userId, fee);
 
         // Lock wallet
         Map<String, Object> wallet;

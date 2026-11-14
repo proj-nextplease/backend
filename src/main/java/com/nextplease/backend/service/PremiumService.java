@@ -24,12 +24,14 @@ public class PremiumService {
     private final NamedParameterJdbcTemplate jdbcTemplate;
     private final ConfigService configService;
     private final NotificationService notificationService;
+    private final AmbassadorService ambassadorService;
 
     public PremiumService(NamedParameterJdbcTemplate jdbcTemplate, ConfigService configService,
-                          NotificationService notificationService) {
+                          NotificationService notificationService, AmbassadorService ambassadorService) {
         this.jdbcTemplate = jdbcTemplate;
         this.configService = configService;
         this.notificationService = notificationService;
+        this.ambassadorService = ambassadorService;
     }
 
     /** Returns current prices and durations of all premium features */
@@ -85,7 +87,9 @@ public class PremiumService {
 
         Map<String, Object> wallet = lockWalletOrThrow(userId);
         int balance = ((Number) wallet.get("np_balance")).intValue();
-        int price = configService.getInt("premium_boost_price_np", 25000);
+        int fullPrice = configService.getInt("premium_boost_price_np", 25000);
+        // Đại sứ thương hiệu: 0 NP (xem AmbassadorService).
+        int price = ambassadorService.waiveFee(userId, fullPrice);
 
         if (balance < price) {
             throw new AppException(HttpStatus.PAYMENT_REQUIRED,
@@ -116,7 +120,8 @@ public class PremiumService {
                 .addValue("walletId", wallet.get("id"))
                 .addValue("amount", -price)
                 .addValue("balanceAfter", newBalance)
-                .addValue("reason", String.format("Đẩy tin nổi bật (Profile Boost): %s", app.get("target_title")))
+                .addValue("reason", AmbassadorService.reason(
+                        String.format("Đẩy tin nổi bật (Profile Boost): %s", app.get("target_title")), fullPrice, price))
                 .addValue("sourceId", applicationId)
                 .addValue("sourceType", isQuest ? "quest_application" : "application")
                 .addValue("ikey", "boost_" + applicationId + "_" + System.currentTimeMillis()));
@@ -157,7 +162,9 @@ public class PremiumService {
 
         Map<String, Object> wallet = lockWalletOrThrow(userId);
         int balance = ((Number) wallet.get("np_balance")).intValue();
-        int price = configService.getInt("application_insight_price_np", 10000);
+        int fullPrice = configService.getInt("application_insight_price_np", 10000);
+        // Đại sứ thương hiệu: 0 NP (xem AmbassadorService).
+        int price = ambassadorService.waiveFee(userId, fullPrice);
 
         if (balance < price) {
             throw new AppException(HttpStatus.PAYMENT_REQUIRED,
@@ -176,8 +183,8 @@ public class PremiumService {
                 .addValue("walletId", wallet.get("id"))
                 .addValue("amount", -price)
                 .addValue("balanceAfter", newBalance)
-                .addValue("reason", String.format("Xem Application Insight cho %s: %s",
-                        isQuest ? "Quest" : "tin", targetTitle))
+                .addValue("reason", AmbassadorService.reason(String.format("Xem Application Insight cho %s: %s",
+                        isQuest ? "Quest" : "tin", targetTitle), fullPrice, price))
                 .addValue("sourceType", isQuest ? "quest" : "job")
                 .addValue("sourceId", targetId)
                 .addValue("ikey", "insight_" + type.toLowerCase() + "_" + userId + "_" + targetId));
@@ -310,7 +317,9 @@ public class PremiumService {
         // 2. Lock wallet
         Map<String, Object> wallet = lockWalletOrThrow(userId);
         int balance = ((Number) wallet.get("np_balance")).intValue();
-        int price = configService.getInt("express_verification_price_np", 15000);
+        int fullPrice = configService.getInt("express_verification_price_np", 15000);
+        // Đại sứ thương hiệu: 0 NP (xem AmbassadorService).
+        int price = ambassadorService.waiveFee(userId, fullPrice);
 
         if (balance < price) {
             throw new AppException(HttpStatus.PAYMENT_REQUIRED,
@@ -330,7 +339,8 @@ public class PremiumService {
                 .addValue("walletId", wallet.get("id"))
                 .addValue("amount", -price)
                 .addValue("balanceAfter", newBalance)
-                .addValue("reason", String.format("Xác thực nhanh (Express Verification): %s", exp.get("project_name")))
+                .addValue("reason", AmbassadorService.reason(
+                        String.format("Xác thực nhanh (Express Verification): %s", exp.get("project_name")), fullPrice, price))
                 .addValue("sourceId", experienceId)
                 .addValue("ikey", "express_" + experienceId));
 
@@ -371,7 +381,9 @@ public class PremiumService {
         // Lock wallet
         Map<String, Object> wallet = lockWalletOrThrow(userId);
         int balance = ((Number) wallet.get("np_balance")).intValue();
-        int price = configService.getInt("profile_theme_price_np", 50000);
+        int fullPrice = configService.getInt("profile_theme_price_np", 50000);
+        // Đại sứ thương hiệu: 0 NP (xem AmbassadorService).
+        int price = ambassadorService.waiveFee(userId, fullPrice);
 
         if (balance < price) {
             throw new AppException(HttpStatus.PAYMENT_REQUIRED,
@@ -386,9 +398,10 @@ public class PremiumService {
 
         jdbcTemplate.update("""
                 insert into wallet_transactions (wallet_id, amount_np, balance_after_np, transaction_type, reason, source_type, idempotency_key)
-                values (:walletId, :amount, :balanceAfter, 'SPEND', 'Mở khóa nâng cấp Visual Theme trọn đời', 'profile', :ikey)
+                values (:walletId, :amount, :balanceAfter, 'SPEND', :reason, 'profile', :ikey)
                 """, new MapSqlParameterSource()
                 .addValue("walletId", wallet.get("id"))
+                .addValue("reason", AmbassadorService.reason("Mở khóa nâng cấp Visual Theme trọn đời", fullPrice, price))
                 .addValue("amount", -price)
                 .addValue("balanceAfter", newBalance)
                 .addValue("ikey", "theme_unlock_" + userId));
@@ -445,7 +458,9 @@ public class PremiumService {
         // Lock wallet
         Map<String, Object> wallet = lockWalletOrThrow(userId);
         int balance = ((Number) wallet.get("np_balance")).intValue();
-        int price = configService.getInt("job_match_alert_price_np", 19000);
+        int fullPrice = configService.getInt("job_match_alert_price_np", 19000);
+        // Đại sứ thương hiệu: 0 NP (xem AmbassadorService).
+        int price = ambassadorService.waiveFee(userId, fullPrice);
 
         if (balance < price) {
             throw new AppException(HttpStatus.PAYMENT_REQUIRED,
@@ -472,9 +487,10 @@ public class PremiumService {
 
         jdbcTemplate.update("""
                 insert into wallet_transactions (wallet_id, amount_np, balance_after_np, transaction_type, reason, source_type, idempotency_key)
-                values (:walletId, :amount, :balanceAfter, 'SPEND', 'Đăng ký nhận thông báo việc làm (Job Match Alert)', 'subscription', :ikey)
+                values (:walletId, :amount, :balanceAfter, 'SPEND', :reason, 'subscription', :ikey)
                 """, new MapSqlParameterSource()
                 .addValue("walletId", wallet.get("id"))
+                .addValue("reason", AmbassadorService.reason("Đăng ký nhận thông báo việc làm (Job Match Alert)", fullPrice, price))
                 .addValue("amount", -price)
                 .addValue("balanceAfter", newBalance)
                 .addValue("ikey", "match_alert_" + userId + "_" + System.currentTimeMillis()));
