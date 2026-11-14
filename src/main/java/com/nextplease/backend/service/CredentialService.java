@@ -274,7 +274,16 @@ public class CredentialService {
         boolean wasExpress = expressRaw instanceof Boolean b && b;
         if (!wasExpress) return false;
 
-        int price = configService.getInt("express_verification_price_np", 15000);
+        /* Hoàn ĐÚNG số đã trả, đọc từ chính giao dịch trừ phí, không lấy giá
+           hiện hành trong cấu hình. Đại sứ thương hiệu được miễn phí (giao dịch
+           0 NP) mà hoàn theo giá cấu hình là cộng không cho họ 15.000 NP; admin
+           đổi giá sau khi người dùng đã trả cũng làm hoàn lệch. */
+        Integer paid = jdbcTemplate.query(
+                "select -amount_np from wallet_transactions where idempotency_key = :ikey and amount_np < 0",
+                Map.of("ikey", "express_" + experienceId),
+                rs -> rs.next() ? rs.getInt(1) : null);
+        if (paid == null || paid <= 0) return false;
+        int price = paid;
         UUID profileId = (UUID) exp.get("profile_id");
         UUID ownerUserId = profileOwnerUserId(profileId);
         if (ownerUserId == null) return false;

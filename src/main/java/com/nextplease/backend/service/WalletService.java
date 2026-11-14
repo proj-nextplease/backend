@@ -31,12 +31,16 @@ public class WalletService {
     /** Mặc định TẮT: an toàn phải là mặc định, bật mới cần khai báo. */
     private final boolean mockTopUpEnabled;
 
+    private final AmbassadorService ambassadorService;
+
     public WalletService(NamedParameterJdbcTemplate jdbcTemplate, ConfigService configService,
+                         AmbassadorService ambassadorService,
                          @org.springframework.beans.factory.annotation.Value(
                                  "${app.wallet.mock-topup-enabled:false}") boolean mockTopUpEnabled) {
         this.mockTopUpEnabled = mockTopUpEnabled;
         this.jdbcTemplate = jdbcTemplate;
         this.configService = configService;
+        this.ambassadorService = ambassadorService;
     }
 
     private int premiumPriceNp() { return configService.getInt("premium_price_np", PREMIUM_PRICE_NP); }
@@ -89,8 +93,17 @@ public class WalletService {
         result.put("recentTransactions", recentTx);
         result.put("premiumPriceNp", premiumPriceNp());
         result.put("minTopupVnd", minTopupVnd());
-        result.put("paidJobAcceptanceFeeNp", configService.getInt("paid_job_acceptance_fee_np", 19000));
-        result.put("portfolioExportFeeNp", configService.getInt("portfolio_export_fee_np", 1000));
+        /* Đại sứ thương hiệu thấy phí = 0 ở mọi màn: web và app đều lấy phí từ
+           đây để hiện giá và kiểm số dư trước khi bấm, nên không màn nào còn
+           đòi nạp NP. Số phí gốc vẫn kèm theo để giao diện ghi "miễn phí". */
+        boolean ambassador = ambassadorService.isActive(userId);
+        int jobFee = configService.getInt("paid_job_acceptance_fee_np", 19000);
+        int exportFee = configService.getInt("portfolio_export_fee_np", 1000);
+        result.put("isAmbassador", ambassador);
+        result.put("paidJobAcceptanceFeeNp", ambassador ? 0 : jobFee);
+        result.put("portfolioExportFeeNp", ambassador ? 0 : exportFee);
+        result.put("standardPaidJobAcceptanceFeeNp", jobFee);
+        result.put("standardPortfolioExportFeeNp", exportFee);
         result.put("defaultTopupPackageNp", configService.getInt("default_topup_package_np", 39000));
         result.put("topupSuggestions", List.of(39000, 69000, 99000, 199000));
         // Gắn vào giao dịch Google Play (obfuscatedAccountId) để backend kiểm
@@ -459,7 +472,9 @@ public class WalletService {
         // Lock wallet
         Map<String, Object> wallet = lockWalletOrThrow(userId);
         int balance = ((Number) wallet.get("np_balance")).intValue();
-        int premiumPrice = premiumPriceNp();
+        int fullPremiumPrice = premiumPriceNp();
+        // Đại sứ thương hiệu: 0 NP (xem AmbassadorService).
+        int premiumPrice = ambassadorService.waiveFee(userId, fullPremiumPrice);
 
         if (balance < premiumPrice) {
             throw new AppException(HttpStatus.PAYMENT_REQUIRED,
@@ -480,10 +495,11 @@ public class WalletService {
                      source_type, idempotency_key)
                 values
                     (:walletId, :amount, :balanceAfter, 'PREMIUM_PURCHASE',
-                     'Mua Premium Pass 30 ngày', 'subscription',
+                     :reason, 'subscription',
                      :ikey)
                 """, new MapSqlParameterSource()
                 .addValue("walletId", wallet.get("id"))
+                .addValue("reason", AmbassadorService.reason("Mua Premium Pass 30 ngày", fullPremiumPrice, premiumPrice))
                 .addValue("amount", -premiumPrice)
                 .addValue("balanceAfter", newBalance)
                 .addValue("ikey", "premium_" + userId + "_" + System.currentTimeMillis()));

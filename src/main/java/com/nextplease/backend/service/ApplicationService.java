@@ -36,10 +36,12 @@ public class ApplicationService {
     private final ReputationService reputationService;
     private final ConfigService configService;
     private final NotificationService notificationService;
+    private final AmbassadorService ambassadorService;
 
     public ApplicationService(NamedParameterJdbcTemplate jdbcTemplate, ObjectMapper objectMapper,
                               ExpService expService, ReputationService reputationService, ConfigService configService,
-                              NotificationService notificationService) {
+                              NotificationService notificationService, AmbassadorService ambassadorService) {
+        this.ambassadorService = ambassadorService;
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
         this.expService = expService;
@@ -498,7 +500,11 @@ public class ApplicationService {
         int fee = 0;
         int balanceAfter = 0;
         if (isPaidJob) {
-            fee = configService.getInt("paid_job_acceptance_fee_np", 19000);
+            int fullFee = configService.getInt("paid_job_acceptance_fee_np", 19000);
+            // Đại sứ thương hiệu: 0 NP (xem AmbassadorService).
+            fee = ambassadorService.waiveFee(userId, fullFee);
+            String feeReason = AmbassadorService.reason(
+                    "Phí xác nhận nhận việc có trả lương: " + app.get("job_title"), fullFee, fee);
             // Lock candidate wallet
             Map<String, Object> wallet;
             try {
@@ -537,7 +543,7 @@ public class ApplicationService {
                     "walletId", walletId,
                     "amount", -fee,
                     "balanceAfter", balanceAfter,
-                    "reason", "Phí xác nhận nhận việc có trả lương: " + app.get("job_title"),
+                    "reason", feeReason,
                     "applicationId", applicationId
             ));
         }
