@@ -2,9 +2,7 @@ package com.nextplease.backend.service;
 
 import com.nextplease.backend.exception.AppException;
 import com.nextplease.backend.exception.ResourceNotFoundException;
-import java.time.LocalDate;
-import java.time.YearMonth;
-import java.time.format.DateTimeParseException;
+import com.nextplease.backend.util.ExperienceDates;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -80,7 +78,9 @@ public class CredentialService {
     public Map<String, Object> submit(UUID userId, SubmitCredentialRequest req) {
         validateCategory(req.category());
         validateRoleLevel(req.roleLevel());
-        validateSubmittedDates(req.startedAt(), req.endedAt());
+        ExperienceDates.Parsed startedAt = parseSubmittedDate(req.startedAt(), "Thời gian bắt đầu");
+        ExperienceDates.Parsed endedAt = parseSubmittedDate(req.endedAt(), "Thời gian kết thúc");
+        validateSubmittedDates(startedAt, endedAt);
 
         UUID profileId = getProfileIdOrThrow(userId);
 
@@ -107,11 +107,12 @@ public class CredentialService {
                 insert into experiences (
                     profile_id, project_name, position, category, role_level,
                     description, proof_link, proof_images, proof_hash, started_at, ended_at,
+                    started_at_has_day, ended_at_has_day,
                     verification_status, source, content_flag, ai_status, created_at, updated_at
                 ) values (
                     :profileId, :projectName, :position, :category, :roleLevel,
                     :description, :proofLink, :proofImages::jsonb, :proofHash,
-                    cast(:startedAt as date), cast(:endedAt as date),
+                    :startedAt, :endedAt, :startHasDay, :endHasDay,
                     'PENDING', 'CREDENTIAL', :contentFlag, 'PENDING', now(), now()
                 )
                 returning id
@@ -127,8 +128,10 @@ public class CredentialService {
                 .addValue("proofLink", req.proofLink())
                 .addValue("proofImages", serializeImages(req.proofImages()))
                 .addValue("proofHash", proofHash)
-                .addValue("startedAt", toFirstOfMonth(req.startedAt()))
-                .addValue("endedAt", toFirstOfMonth(req.endedAt())),
+                .addValue("startedAt", ExperienceDates.toSql(startedAt))
+                .addValue("endedAt", ExperienceDates.toSql(endedAt))
+                .addValue("startHasDay", ExperienceDates.hasDay(startedAt))
+                .addValue("endHasDay", ExperienceDates.hasDay(endedAt)),
                 UUID.class);
 
         log.info("[CredentialService] User {} submitted credential, experienceId={}, category={}, role={}",
@@ -471,45 +474,29 @@ public class CredentialService {
         ));
     }
 
-    private static void validateSubmittedDates(String startedAt, String endedAt) {
-        LocalDate startDate = parseSubmittedMonth(startedAt, "Thời gian bắt đầu");
-        LocalDate endDate = parseSubmittedMonth(endedAt, "Thời gian kết thúc");
-        LocalDate currentMonth = YearMonth.now().atDay(1);
-
-        if (startDate != null && startDate.isAfter(currentMonth)) {
-            throw new AppException(HttpStatus.BAD_REQUEST, "Thời gian bắt đầu không được sau tháng hiện tại.");
+    private static void validateSubmittedDates(ExperienceDates.Parsed startDate, ExperienceDates.Parsed endDate) {
+        if (ExperienceDates.isInFuture(startDate)) {
+            throw new AppException(HttpStatus.BAD_REQUEST, "Thời gian bắt đầu không được sau ngày hôm nay.");
         }
-        if (endDate != null && endDate.isAfter(currentMonth)) {
-            throw new AppException(HttpStatus.BAD_REQUEST, "Thời gian kết thúc không được sau tháng hiện tại.");
+        if (ExperienceDates.isInFuture(endDate)) {
+            throw new AppException(HttpStatus.BAD_REQUEST, "Thời gian kết thúc không được sau ngày hôm nay.");
         }
-        if (startDate != null && endDate != null && endDate.isBefore(startDate)) {
+        if (ExperienceDates.endsBeforeStart(startDate, endDate)) {
             throw new AppException(HttpStatus.BAD_REQUEST, "Thời gian kết thúc không được trước thời gian bắt đầu.");
         }
     }
 
-    private static LocalDate parseSubmittedMonth(String value, String fieldLabel) {
+    /**
+     * Web gửi {@code yyyy-MM-dd}; app di động bản cũ cũng gửi {@code yyyy-MM-dd},
+     * web bản cũ gửi {@code yyyy-MM} (chỉ tháng) — nhận cả hai.
+     */
+    private static ExperienceDates.Parsed parseSubmittedDate(String value, String fieldLabel) {
         if (value == null || value.isBlank()) return null;
-        try {
-            if (value.length() == 7) {
-                return YearMonth.parse(value).atDay(1);
-            }
-            if (value.length() == 10) {
-                return LocalDate.parse(value).withDayOfMonth(1);
-            }
-        } catch (DateTimeParseException ex) {
-            throw new AppException(HttpStatus.BAD_REQUEST, fieldLabel + " không đúng định dạng YYYY-MM.");
+        ExperienceDates.Parsed parsed = ExperienceDates.parse(value);
+        if (parsed == null) {
+            throw new AppException(HttpStatus.BAD_REQUEST, fieldLabel + " không hợp lệ. Vui lòng nhập theo dạng dd/mm/yyyy.");
         }
-        throw new AppException(HttpStatus.BAD_REQUEST, fieldLabel + " không đúng định dạng YYYY-MM.");
-    }
-
-    /** Converts "YYYY-MM" (HTML month input) or "YYYY-MM-DD" to "YYYY-MM-01" for PostgreSQL date. */
-    private static String toFirstOfMonth(String value) {
-        if (value == null || value.isBlank()) return null;
-        // Already full date
-        if (value.length() == 10) return value;
-        // "YYYY-MM" → "YYYY-MM-01"
-        if (value.length() == 7) return value + "-01";
-        return null;
+        return parsed;
     }
 
     /** Immutable record used as request DTO inside this service. */

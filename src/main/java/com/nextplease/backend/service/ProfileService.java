@@ -8,11 +8,11 @@ import com.nextplease.backend.dto.SkillItemDto;
 import com.nextplease.backend.dto.request.PortfolioRequest;
 import com.nextplease.backend.dto.response.PortfolioResponse;
 import com.nextplease.backend.dto.response.PublicPortfolioResponse;
+import com.nextplease.backend.util.ExperienceDates;
 import com.nextplease.backend.exception.AppException;
 import com.nextplease.backend.util.Slugs;
 import com.nextplease.backend.exception.ResourceNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
-import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
@@ -316,7 +316,8 @@ public class ProfileService {
         // Các minh chứng đang chờ duyệt (PENDING) hoặc từ chối (REJECTED) được quản lý riêng tại trang Minh chứng (Credentials).
         List<ExperienceDto> experiences = jdbcTemplate.query(
                 """
-                        select id, project_name, position, description, started_at, ended_at, proof_images::text as proof_images,
+                        select id, project_name, position, description, started_at, ended_at, started_at_has_day, ended_at_has_day,
+                               proof_images::text as proof_images,
                                category, role_level, proof_link, verification_status from experiences
                         where profile_id = :profileId
                           and verification_status = 'APPROVED'
@@ -327,8 +328,8 @@ public class ProfileService {
                         rs.getString("position"),
                         rs.getString("project_name"),
                         rs.getString("description"),
-                        formatMmYy(rs.getDate("started_at")),
-                        formatMmYy(rs.getDate("ended_at")),
+                        ExperienceDates.format(rs.getDate("started_at"), rs.getBoolean("started_at_has_day")),
+                        ExperienceDates.format(rs.getDate("ended_at"), rs.getBoolean("ended_at_has_day")),
                         deserializeImages(rs.getString("proof_images")),
                         rs.getString("category"),
                         rs.getString("role_level"),
@@ -353,7 +354,7 @@ public class ProfileService {
         boolean openToWork = profile.get("open_to_work") != null && (Boolean) profile.get("open_to_work");
         Map<String, Object> socialLinks = parseJsonMap(getJsonString(profile.get("social_links")));
         int exportCount = profile.get("export_count") != null ? ((Number) profile.get("export_count")).intValue() : 0;
-        boolean isExported = exportCount > 0 && profile.get("last_exported_at") != null;
+        boolean isExported = isExported(profile);
 
         return new PortfolioResponse(
                 displayName,
@@ -544,7 +545,8 @@ public class ProfileService {
                             select id, headline, bio, location, school_id, avatar_config, avatar_url,
                                    cover_banner_url, cover_banner_pos, credentials::text as credentials,
                                    onboarding_completed, reputation_score, total_exp, current_level, selected_theme, theme_unlocked,
-                                   open_to_work, social_links::text as social_links, is_public
+                                   open_to_work, social_links::text as social_links, is_public,
+                                   export_count, last_exported_at
                             from profiles where user_id = :userId
                             """,
                     Map.of("userId", userId));
@@ -623,7 +625,8 @@ public class ProfileService {
          */
         List<ExperienceDto> experiences = jdbcTemplate.query(
                 """
-                        select id, project_name, position, description, started_at, ended_at, proof_images::text as proof_images,
+                        select id, project_name, position, description, started_at, ended_at, started_at_has_day, ended_at_has_day,
+                               proof_images::text as proof_images,
                                category, role_level, proof_link, verification_status from experiences
                         where profile_id = :profileId
                           and verification_status = 'APPROVED'
@@ -634,8 +637,8 @@ public class ProfileService {
                         rs.getString("position"),
                         rs.getString("project_name"),
                         rs.getString("description"),
-                        formatMmYy(rs.getDate("started_at")),
-                        formatMmYy(rs.getDate("ended_at")),
+                        ExperienceDates.format(rs.getDate("started_at"), rs.getBoolean("started_at_has_day")),
+                        ExperienceDates.format(rs.getDate("ended_at"), rs.getBoolean("ended_at_has_day")),
                         deserializeImages(rs.getString("proof_images")),
                         rs.getString("category"),
                         rs.getString("role_level"),
@@ -680,7 +683,14 @@ public class ProfileService {
                 experiences, credentials,
                 reputationScore, totalExp, currentLevel,
                 selectedTheme, themeUnlocked,
-                openToWork, socialLinks, isPremium);
+                openToWork, socialLinks, isPremium,
+                isExported(profile));
+    }
+
+    /** Cùng một quy tắc cho trang của chủ hồ sơ và trang công khai. */
+    private static boolean isExported(Map<String, Object> profile) {
+        Object count = profile.get("export_count");
+        return count != null && ((Number) count).intValue() > 0 && profile.get("last_exported_at") != null;
     }
 
     @Transactional
@@ -949,8 +959,16 @@ public class ProfileService {
                     (exp.organization() == null || exp.organization().trim().isEmpty())) {
                 continue; // Skip empty records
             }
-            LocalDate startDate = parseMmYy(exp.startDate());
-            LocalDate endDate = parseMmYy(exp.endDate());
+            ExperienceDates.Parsed startDate = ExperienceDates.parse(exp.startDate());
+            ExperienceDates.Parsed endDate = ExperienceDates.parse(exp.endDate());
+            if (ExperienceDates.isInFuture(startDate) || ExperienceDates.isInFuture(endDate)) {
+                throw new AppException(HttpStatus.BAD_REQUEST,
+                        "Thời gian của kinh nghiệm \"" + exp.title() + "\" không được sau ngày hôm nay.");
+            }
+            if (ExperienceDates.endsBeforeStart(startDate, endDate)) {
+                throw new AppException(HttpStatus.BAD_REQUEST,
+                        "Thời gian kết thúc của kinh nghiệm \"" + exp.title() + "\" đang trước thời gian bắt đầu.");
+            }
             UUID existingId = tryParseUuid(exp.id());
 
             MapSqlParameterSource params = new MapSqlParameterSource()
@@ -958,8 +976,10 @@ public class ProfileService {
                     .addValue("organization", exp.organization() == null ? "" : exp.organization().trim())
                     .addValue("title", exp.title() == null ? "" : exp.title().trim())
                     .addValue("description", exp.detail() == null ? "" : exp.detail().trim())
-                    .addValue("startDate", startDate != null ? java.sql.Date.valueOf(startDate) : null)
-                    .addValue("endDate", endDate != null ? java.sql.Date.valueOf(endDate) : null)
+                    .addValue("startDate", ExperienceDates.toSql(startDate))
+                    .addValue("endDate", ExperienceDates.toSql(endDate))
+                    .addValue("startHasDay", ExperienceDates.hasDay(startDate))
+                    .addValue("endHasDay", ExperienceDates.hasDay(endDate))
                     .addValue("proofImages", serializeImages(exp.proofImages()))
                     .addValue("category", sanitizeCategory(exp.category()))
                     .addValue("roleLevel", sanitizeRoleLevel(exp.roleLevel()))
@@ -983,6 +1003,8 @@ public class ProfileService {
                                 proof_link   = :proofLink,
                                 started_at   = :startDate,
                                 ended_at     = :endDate,
+                                started_at_has_day = :startHasDay,
+                                ended_at_has_day   = :endHasDay,
                                 proof_images = cast(:proofImages as jsonb),
                                 updated_at   = now()
                             where id = :id
@@ -1003,6 +1025,8 @@ public class ProfileService {
                                 proof_link   = :proofLink,
                                 started_at   = :startDate,
                                 ended_at     = :endDate,
+                                started_at_has_day = :startHasDay,
+                                ended_at_has_day   = :endHasDay,
                                 proof_images = cast(:proofImages as jsonb),
                                 updated_at   = now()
                             where id = :id
@@ -1012,8 +1036,8 @@ public class ProfileService {
                 UUID newId = UUID.randomUUID();
                 jdbcTemplate.update(
                         """
-                                insert into experiences (id, profile_id, project_name, position, category, role_level, proof_link, description, started_at, ended_at, proof_images, verification_status, source, created_at, updated_at)
-                                values (:id, :profileId, :organization, :title, :category, :roleLevel, :proofLink, :description, :startDate, :endDate, cast(:proofImages as jsonb), 'PENDING', 'PORTFOLIO', now(), now())
+                                insert into experiences (id, profile_id, project_name, position, category, role_level, proof_link, description, started_at, ended_at, started_at_has_day, ended_at_has_day, proof_images, verification_status, source, created_at, updated_at)
+                                values (:id, :profileId, :organization, :title, :category, :roleLevel, :proofLink, :description, :startDate, :endDate, :startHasDay, :endHasDay, cast(:proofImages as jsonb), 'PENDING', 'PORTFOLIO', now(), now())
                                 """,
                         params.addValue("id", newId));
 
@@ -1061,35 +1085,6 @@ public class ProfileService {
 
     private static String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value.trim();
-    }
-
-    private LocalDate parseMmYy(String value) {
-        if (value == null || value.trim().isEmpty()) {
-            return null;
-        }
-        try {
-            String[] parts = value.split("/");
-            if (parts.length != 2) {
-                return null;
-            }
-            int month = Integer.parseInt(parts[0].trim());
-            int year = Integer.parseInt(parts[1].trim());
-            if (year < 100) {
-                year += 2000;
-            }
-            return LocalDate.of(year, month, 1);
-        } catch (Exception e) {
-            log.warn("Failed to parse date string {}: {}", value, e.getMessage());
-            return null;
-        }
-    }
-
-    private String formatMmYy(java.sql.Date date) {
-        if (date == null) {
-            return "";
-        }
-        LocalDate localDate = date.toLocalDate();
-        return String.format("%02d/%02d", localDate.getMonthValue(), localDate.getYear() % 100);
     }
 
     // Proof images: clamp to 6 non-blank entries, store as a jsonb array string

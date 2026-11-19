@@ -38,5 +38,11 @@ public record PublicPortfolioResponse(
                 boolean openToWork,
                 Map<String, Object> socialLinks,
                 /** Huy hiệu Premium trên link hồ sơ ứng viên gửi cho nhà tuyển dụng. */
-                boolean isPremium) {
+                boolean isPremium,
+                /**
+                 * Ứng viên đã xuất bản website ít nhất một lần chưa. Trang xem
+                 * portfolio dựa vào cờ này để chọn giữa hồ sơ và màn "chưa xuất
+                 * bản"; thiếu nó thì trang luôn coi là chưa xuất bản.
+                 */
+                boolean isExported) {
 }

@@ -65,7 +65,7 @@ public class AiVerificationWorker {
         List<Map<String, Object>> rows = jdbcTemplate.queryForList("""
                 select e.id, e.profile_id, e.project_name, e.position, e.category, e.role_level,
                        e.description, e.proof_link, e.proof_images::text as proof_images,
-                       e.started_at, e.ended_at, e.verification_status,
+                       e.started_at, e.ended_at, e.started_at_has_day, e.ended_at_has_day, e.verification_status,
                        u.display_name as candidate_name, u.email as candidate_email
                 from experiences e
                 join profiles p on p.id = e.profile_id
@@ -114,8 +114,10 @@ public class AiVerificationWorker {
                 (String) exp.get("category"),
                 (String) exp.get("role_level"),
                 (String) exp.get("description"),
-                exp.get("started_at") != null ? exp.get("started_at").toString() : null,
-                exp.get("ended_at") != null ? exp.get("ended_at").toString() : null,
+                // Bản ghi cũ chỉ có tháng: đưa "06/2026" chứ không đưa "2026-06-01",
+                // kẻo AI tưởng ngày 01 là ngày ứng viên khai rồi đem ra đối chiếu.
+                promptDate(exp.get("started_at"), exp.get("started_at_has_day")),
+                promptDate(exp.get("ended_at"), exp.get("ended_at_has_day")),
                 (String) exp.get("proof_link"),
                 images,
                 approvedSummary
@@ -267,5 +269,9 @@ public class AiVerificationWorker {
             return List.of();
         }
     }
-}
 
+    private static String promptDate(Object date, Object hasDay) {
+        if (!(date instanceof java.sql.Date d)) return null;
+        return com.nextplease.backend.util.ExperienceDates.format(d, Boolean.TRUE.equals(hasDay));
+    }
+}
