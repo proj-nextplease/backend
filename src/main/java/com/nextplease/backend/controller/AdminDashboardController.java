@@ -643,6 +643,13 @@ public class AdminDashboardController {
         return ApiResponse.success(credentialService.getAllSubmissions(admin.appUserId()));
     }
 
+    /** GET /api/v1/admin/dashboard/verification-queue/{id}/proof-images — ảnh minh chứng của 1 mục (tải khi mở chi tiết) */
+    @GetMapping("/verification-queue/{id}/proof-images")
+    public ApiResponse<List<String>> getVerificationProofImages(@PathVariable UUID id) {
+        requireAdmin();
+        return ApiResponse.success(credentialService.getProofImages(id));
+    }
+
     /** POST /api/v1/admin/dashboard/verification-queue/{id}/approve */
     @PostMapping("/verification-queue/{id}/approve")
     public ApiResponse<String> approveCredential(
