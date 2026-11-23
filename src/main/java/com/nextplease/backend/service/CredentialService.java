@@ -338,7 +338,11 @@ public class CredentialService {
                        e.role_level,
                        e.description,
                        e.proof_link,
-                       e.proof_images::text as proof_images,
+                       -- Ảnh minh chứng là data URL base64 (có thể vài MB/ảnh). Danh sách
+                       -- chỉ trả số lượng; ảnh được tải riêng khi admin mở chi tiết qua
+                       -- getProofImages() để tránh đốt egress Supabase mỗi lần tải hàng chờ.
+                       -- Cột generated (V73): đọc số đếm mà không phải giải nén proof_images.
+                       e.proof_image_count as "proofImageCount",
                        e.verification_status,
                        e.started_at,
                        e.ended_at,
@@ -382,7 +386,11 @@ public class CredentialService {
                        e.role_level,
                        e.description,
                        e.proof_link,
-                       e.proof_images::text as proof_images,
+                       -- Ảnh minh chứng là data URL base64 (có thể vài MB/ảnh). Danh sách
+                       -- chỉ trả số lượng; ảnh được tải riêng khi admin mở chi tiết qua
+                       -- getProofImages() để tránh đốt egress Supabase mỗi lần tải hàng chờ.
+                       -- Cột generated (V73): đọc số đếm mà không phải giải nén proof_images.
+                       e.proof_image_count as "proofImageCount",
                        e.verification_status,
                        e.reject_reason,
                        e.verified_at,
@@ -415,6 +423,38 @@ public class CredentialService {
                 where e.deleted_at is null
                 order by e.created_at desc
                 """, Map.of("me", currentAdminId));
+    }
+
+    /** Admin fetch: proof images (data URLs / hosted URLs) of ONE experience. */
+    public List<String> getProofImages(UUID experienceId) {
+        List<String> rows = jdbcTemplate.queryForList("""
+                select proof_images::text
+                from experiences
+                where id = :id and deleted_at is null
+                """, Map.of("id", experienceId), String.class);
+        if (rows.isEmpty()) {
+            throw new AppException(HttpStatus.NOT_FOUND, "Không tìm thấy minh chứng.");
+        }
+        String raw = rows.get(0);
+        if (raw == null || raw.isBlank()) {
+            return List.of();
+        }
+        try {
+            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(raw);
+            if (!node.isArray()) {
+                return List.of();
+            }
+            List<String> images = new java.util.ArrayList<>();
+            node.forEach(n -> {
+                if (n.isTextual() && !n.asText().isBlank()) {
+                    images.add(n.asText());
+                }
+            });
+            return images;
+        } catch (Exception e) {
+            log.warn("[CredentialService] Cannot parse proof_images of experience {}", experienceId);
+            return List.of();
+        }
     }
 
     // ── private helpers ──────────────────────────────────────────────────────
