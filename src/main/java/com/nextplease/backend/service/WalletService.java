@@ -19,7 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class WalletService {
 
     private static final Logger log = LoggerFactory.getLogger(WalletService.class);
-    private static final int MIN_TOPUP_VND = 10_000;
+    private static final int MIN_TOPUP_VND = 39_000;
     private static final int PREMIUM_PRICE_NP = 40_000;
     private static final String PREMIUM_PLAN = "candidate_premium_monthly";
     private static final int PREMIUM_DURATION_DAYS = 30;
