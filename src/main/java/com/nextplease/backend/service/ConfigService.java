@@ -53,6 +53,7 @@ public class ConfigService {
                        data_type as "dataType", config_group as "group", label, description,
                        updated_at as "updatedAt"
                 from system_configs
+                where config_group <> 'finance'   -- quản lý ở tab Tài chính, không phải ở trang Cấu hình
                 order by config_group, config_key
                 """, Map.of());
     }
