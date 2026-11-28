@@ -1,7 +1,7 @@
 -- ==============================================================================
 -- Thay toàn bộ tin việc làm tuyển chọn bằng tin trong Google Sheet.
 -- Nguồn: https://docs.google.com/spreadsheets/d/1HhA5bA8AI3egisL_hdo1Tlg-XoXds3f2cuFkvZcLAuw/edit?gid=0#gid=0
--- Tạo bởi scripts/curated_jobs_from_sheet.py lúc 28/11/2026 16:28. 10 tin.
+-- Tạo bởi scripts/curated_jobs_from_sheet.py lúc 28/11/2026 16:33. 10 tin.
 -- Không đụng tới bảng jobs (tin do doanh nghiệp, CLB tự đăng).
 -- ==============================================================================
 
@@ -139,7 +139,7 @@ Quyền lợi:
 - Lương/thưởng dịp lễ, tết, tháng 13.
 - Tham gia BHXH, BHYT, BHTN theo quy định Nhà nước
 
-Liên hệ: Hotline: 090 68 68 348 (zalo)
+Liên hệ: Hotline: 091 68 68 348 (zalo)
 Ghi chú: Ứng viên quan tâm nộp CV qua Sdt',
     'Lương cứng kèm với Lương kinh doanh', null, null, null, null,
     'https://www.facebook.com/share/p/1A5xtbKngE/',
