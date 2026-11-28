@@ -38,19 +38,22 @@ public class AdminDashboardController {
     private final com.nextplease.backend.service.CredentialService credentialService;
     private final com.nextplease.backend.service.SupabaseAdminService supabaseAdminService;
     private final com.nextplease.backend.service.NotificationService notificationService;
+    private final com.nextplease.backend.service.AdminFinanceService adminFinanceService;
 
     public AdminDashboardController(
             CurrentUserService currentUserService,
             NamedParameterJdbcTemplate jdbcTemplate,
             com.nextplease.backend.service.CredentialService credentialService,
             com.nextplease.backend.service.SupabaseAdminService supabaseAdminService,
-            com.nextplease.backend.service.NotificationService notificationService
+            com.nextplease.backend.service.NotificationService notificationService,
+            com.nextplease.backend.service.AdminFinanceService adminFinanceService
     ) {
         this.currentUserService = currentUserService;
         this.jdbcTemplate = jdbcTemplate;
         this.credentialService = credentialService;
         this.supabaseAdminService = supabaseAdminService;
         this.notificationService = notificationService;
+        this.adminFinanceService = adminFinanceService;
     }
 
     /** Notify the post owner about an admin moderation decision (fail-soft). */
@@ -482,6 +485,35 @@ public class AdminDashboardController {
      * GET /api/v1/admin/dashboard/audit-logs
      * Returns system logs.
      */
+    /**
+     * GET /api/v1/admin/dashboard/finance
+     * Tiền vào hệ thống: nạp NP qua cổng thanh toán thật, phí NP đã thu, biểu đồ theo ngày và tháng.
+     */
+    @GetMapping("/finance")
+    public ApiResponse<Map<String, Object>> getFinance() {
+        requireAdmin();
+        return ApiResponse.success(adminFinanceService.getOverview());
+    }
+
+    /** POST /api/v1/admin/dashboard/finance/test-accounts  body: { "email": "..." } hoặc { "userId": "..." } */
+    @PostMapping("/finance/test-accounts")
+    public ApiResponse<List<Map<String, Object>>> addFinanceTestAccount(@RequestBody Map<String, Object> body) {
+        MeResponse admin = requireAdmin();
+        Object email = body == null ? null : body.get("email");
+        Object userId = body == null ? null : body.get("userId");
+        return ApiResponse.success(adminFinanceService.addTestAccount(
+                email == null ? null : email.toString(),
+                userId == null ? null : userId.toString(),
+                admin.appUserId()));
+    }
+
+    /** DELETE /api/v1/admin/dashboard/finance/test-accounts/{userId} */
+    @org.springframework.web.bind.annotation.DeleteMapping("/finance/test-accounts/{userId}")
+    public ApiResponse<List<Map<String, Object>>> removeFinanceTestAccount(@PathVariable String userId) {
+        MeResponse admin = requireAdmin();
+        return ApiResponse.success(adminFinanceService.removeTestAccount(userId, admin.appUserId()));
+    }
+
     @GetMapping("/audit-logs")
     public ApiResponse<List<Map<String, Object>>> getAuditLogs() {
         requireAdmin();
@@ -491,7 +523,7 @@ public class AdminDashboardController {
                        al.action,
                        al.entity_type as "entityType",
                        al.entity_id as "entityId",
-                       al.metadata,
+                       al.metadata::text as metadata,
                        al.created_at as "createdAt",
                        u.email as "actorEmail",
                        u.display_name as "actorName",
