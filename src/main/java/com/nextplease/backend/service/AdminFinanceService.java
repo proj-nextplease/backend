@@ -164,6 +164,20 @@ public class AdminFinanceService {
         return listTestAccounts();
     }
 
+    /** Bỏ các dòng của tài khoản test, giữ tối đa {@code limit} dòng đầu, giữ thứ tự. */
+    static List<Map<String, Object>> withoutTestUsers(List<Map<String, Object>> rows, Set<String> testIds, int limit) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Map<String, Object> r : rows) {
+            if (out.size() >= limit) {
+                break;
+            }
+            if (!testIds.contains(String.valueOf(r.get("userId")))) {
+                out.add(r);
+            }
+        }
+        return out;
+    }
+
     public Map<String, Object> getOverview() {
         Set<String> testIds = loadTestUserIds();
 
@@ -215,16 +229,24 @@ public class AdminFinanceService {
                 order by coalesce(pr.paid_at, pr.created_at) desc
                 limit 40
                 """, Map.of());
-        List<Map<String, Object>> realRecent = new ArrayList<>();
-        for (Map<String, Object> r : recent) {
-            if (!testIds.contains(String.valueOf(r.get("userId")))) {
-                realRecent.add(r);
-            }
-            if (realRecent.size() == 10) {
-                break;
-            }
-        }
-        summary.put("recentPayments", realRecent);
+        summary.put("recentPayments", withoutTestUsers(recent, testIds, 10));
+
+        List<Map<String, Object>> unpaid = jdbc.queryForList("""
+                select pr.id,
+                       pr.user_id::text as "userId",
+                       pr.status,
+                       pr.amount_vnd as "amountVnd",
+                       pr.provider,
+                       pr.created_at as "createdAt",
+                       coalesce(u.display_name, split_part(u.email, '@', 1), 'Người dùng') as "userName",
+                       u.email as "userEmail"
+                from payment_requests pr
+                left join app_users u on u.id = pr.user_id
+                where pr.status in ('PENDING', 'CANCELLED', 'EXPIRED', 'FAILED') and pr.provider <> 'MOCK'
+                order by pr.created_at desc
+                limit 300
+                """, Map.of());
+        summary.put("unpaidRequests", withoutTestUsers(unpaid, testIds, 200));
         summary.put("testAccounts", listTestAccounts());
         summary.put("generatedAt", Instant.now().toString());
         return summary;

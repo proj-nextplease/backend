@@ -14,6 +14,7 @@ import static org.mockito.Mockito.when;
 
 import com.nextplease.backend.exception.AppException;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
@@ -79,5 +80,19 @@ class AdminFinanceServiceTest {
         when(jdbc.queryForList(anyString(), anyMap())).thenReturn(List.of());
         service.addTestAccount("team@x.vn", null, admin);
         verify(jdbc, org.mockito.Mockito.times(2)).update(anyString(), any(SqlParameterSource.class));
+    }
+
+    @Test
+    @DisplayName("Danh sách người nạp: bỏ tài khoản test, giữ thứ tự, cắt đúng giới hạn")
+    void boTaiKhoanTestKhoiDanhSach() {
+        List<Map<String, Object>> rows = List.of(
+                Map.of("userId", "team", "status", "PENDING"),
+                Map.of("userId", "a", "status", "PENDING"),
+                Map.of("userId", "team", "status", "CANCELLED"),
+                Map.of("userId", "b", "status", "CANCELLED"),
+                Map.of("userId", "c", "status", "EXPIRED"));
+        List<Map<String, Object>> out = AdminFinanceService.withoutTestUsers(rows, Set.of("team"), 2);
+        assertEquals(List.of("a", "b"), out.stream().map(r -> r.get("userId")).toList());
+        assertEquals(3, AdminFinanceService.withoutTestUsers(rows, Set.of("team"), 10).size());
     }
 }
